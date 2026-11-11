@@ -5,6 +5,8 @@
 
 pub mod avatar_build;
 pub mod audio;
+#[cfg(feature = "local-identity")]
+pub mod faceswap;
 pub mod keyframes;
 pub mod shots;
 pub mod qc;
