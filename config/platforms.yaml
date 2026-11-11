@@ -1,0 +1,39 @@
+# Platform profiles: deterministic ffmpeg assembly parameters.
+# See ARCHITECTURE.md section 10.
+
+platforms:
+  youtube_shorts:
+    width: 1080
+    height: 1920
+    fps: 30
+    max_duration_s: 180        # verify current limit in M0
+    loudness_lufs: -14
+    subtitles: word_level_ass
+    subtitle_safe_area: { top: 0.12, bottom: 0.18 }
+    subtitle_font_size: large
+
+  youtube_long:
+    width: 1920
+    height: 1080
+    fps: 30
+    max_duration_s: null       # unlimited
+    loudness_lufs: -14
+    subtitles: optional_bottom
+    chapters_from_script: true
+
+  vertical_generic:
+    width: 1080
+    height: 1920
+    fps: 30
+    max_duration_s: 90
+    loudness_lufs: -14
+    subtitles: word_level_ass
+    subtitle_safe_area: { top: 0.12, bottom: 0.18 }
+    subtitle_font_size: large
+
+# Export rules (ARCHITECTURE.md section 10):
+# - ai_disclosure: true by default in metadata.json; removal is an explicit decision.
+# - No auto-publish in any version; operator uploads manually.
+export:
+  ai_disclosure_default: true
+  auto_publish: false

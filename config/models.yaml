@@ -1,0 +1,130 @@
+# Registry of models: role → tier → provider/model/params/price.
+# Prices are hypotheses until M0 spike fills this file with real numbers
+# (ARCHITECTURE.md section 12). providers_check verifies model_id liveness daily.
+#
+# Constraint: no forced output watermarking (visible or invisible). Models with
+# mandatory output marking do not enter this registry (operator decision #9).
+
+defaults:
+  tier: standard
+  budget_cap_usd: 25
+  max_concurrency: 4
+
+roles:
+  avatar_canon:
+    # Character sheet generation. Multi-reference, strong identity lock.
+    standard:
+      provider: fal
+      model_id: bfl/flux-2-pro          # placeholder until M0
+      params: { max_references: 5 }
+      price_per_unit: 0.06
+    premium:
+      provider: fal
+      model_id: seedream-5-pro-4k       # placeholder until M0
+      params: { max_references: 5 }
+      price_per_unit: 0.12
+
+  keyframe:
+    # Per-shot frame. Multi-reference mandatory for identity.
+    draft:
+      provider: fal
+      model_id: seedream-5-flash        # placeholder until M0
+      params: { max_references: 5 }
+      price_per_image: 0.02
+    standard:
+      provider: fal
+      model_id: seedream-5              # placeholder until M0
+      params: { max_references: 5 }
+      price_per_image: 0.04
+    premium:
+      provider: fal
+      model_id: seedream-5-pro          # placeholder until M0
+      params: { max_references: 5 }
+      price_per_image: 0.06
+
+  talk:
+    # Photo + audio -> talking video. Cost driver #1 (per second).
+    draft:
+      provider: fal
+      model_id: infinitetalk-480p       # placeholder until M0
+      price_per_second: 0.03
+    standard:
+      provider: fal
+      model_id: kling-avatar-v2-standard # placeholder until M0
+      price_per_second: 0.056
+    premium:
+      provider: fal
+      model_id: kling-avatar-v2-pro     # placeholder until M0
+      price_per_second: 0.115
+
+  broll:
+    # Image-to-video without avatar. Audio disabled (our VO runs over it).
+    draft:
+      provider: fal
+      model_id: seedance-2-lite         # placeholder until M0
+      price_per_second: 0.05
+    standard:
+      provider: fal
+      model_id: seedance-2              # placeholder until M0
+      price_per_second: 0.10
+    premium:
+      provider: fal
+      model_id: kling-3-pro             # placeholder until M0
+      price_per_second: 0.14
+
+  broll_reference:
+    # Reference-to-video with avatar(s) in action. Up to 5 people.
+    draft:
+      provider: fal
+      model_id: seedance-2-reference    # placeholder until M0
+      price_per_second: 0.07
+    standard:
+      provider: fal
+      model_id: kling-o3-reference      # placeholder until M0
+      price_per_second: 0.10
+    premium:
+      provider: fal
+      model_id: kling-o3-reference-pro  # placeholder until M0
+      price_per_second: 0.15
+
+  tts:
+    # Voice clone + speech. Cost driver #2 (per 1K chars).
+    draft:
+      provider: elevenlabs
+      model_id: eleven_flash_v2
+      price_per_1k_chars: 0.05
+    standard:
+      provider: elevenlabs
+      model_id: eleven_v3
+      price_per_1k_chars: 0.10
+    premium:
+      provider: elevenlabs
+      model_id: eleven_v3
+      price_per_1k_chars: 0.10
+
+  word_timing:
+    # Alignment from TTS response; local whisper fallback ($0).
+    draft: { provider: tts_response }
+    standard: { provider: tts_response }
+    premium: { provider: local_whisper }
+
+  qc_judge:
+    # Vision judge for borderline identity scores and artifacts.
+    draft:
+      provider: fal
+      model_id: qwen3-vl-flash          # placeholder until M0
+      price_per_call: 0.002
+    standard:
+      provider: fal
+      model_id: qwen3-vl                # placeholder until M0
+      price_per_call: 0.004
+    premium:
+      provider: anthropic
+      model_id: claude-sonnet
+      price_per_call: 0.01
+
+# Filled by M0 spike:
+m0_results:
+  watermark_check: {}    # per model: visible/none/unknown
+  moderation_threshold: {} # per model: strict/moderate/lenient
+  blind_test_winner: {}  # per role: model chosen on real face/voice

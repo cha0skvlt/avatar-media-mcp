@@ -1,0 +1,40 @@
+[package]
+name = "avatar-media-mcp"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Avatar media MCP server: identity storage, generative pipeline, cost control. Companion server for CHA0S AOE."
+
+[dependencies]
+rmcp = { version = "0.3", features = ["server", "macros", "transport-io"] }
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+schemars = "0.8"
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate"] }
+image = "0.25"
+anyhow = "1"
+thiserror = "2"
+figment = { version = "0.10", features = ["yaml", "env"] }
+tokio-retry = "0.3"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Optional: local identity models (ArcFace embeddings, whisper alignment fallback)
+ort = { version = "2.0.0-rc.15", optional = true, features = ["fetch-models", "load-dynamic"] }
+ndarray = { version = "0.17.2", optional = true }
+
+[features]
+default = []
+local-identity = ["dep:ort", "dep:ndarray"]
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
