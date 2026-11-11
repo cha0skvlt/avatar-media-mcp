@@ -88,7 +88,6 @@ pub struct ProviderKeys {
     pub fish_api_key: Option<String>,
     pub hedra_api_key: Option<String>,
     pub byteplus_api_key: Option<String>,
-    pub anthropic_api_key: Option<String>,
     pub kling_access_key: Option<String>,
     pub kling_secret_key: Option<String>,
 }
@@ -102,7 +101,6 @@ impl ProviderKeys {
             fish_api_key: get("FISH_API_KEY"),
             hedra_api_key: get("HEDRA_API_KEY"),
             byteplus_api_key: get("BYTEPLUS_API_KEY"),
-            anthropic_api_key: get("ANTHROPIC_API_KEY"),
             kling_access_key: get("KLING_ACCESS_KEY"),
             kling_secret_key: get("KLING_SECRET_KEY"),
         }

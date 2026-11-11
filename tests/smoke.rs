@@ -188,7 +188,7 @@ fn preflight_reports_the_real_configuration() {
     assert!(report.models.ok, "models.yaml: {}", report.models.detail);
     assert!(report.platforms.ok, "platforms.yaml: {}", report.platforms.detail);
     assert!(report.settings.ok, "settings.yaml: {}", report.settings.detail);
-    assert_eq!(report.keys.len(), 8);
+    assert_eq!(report.keys.len(), 7);
     // The avatars root is created on demand; the report must not lie about it.
     assert!(report.avatars.writable);
 }

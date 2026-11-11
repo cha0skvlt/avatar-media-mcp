@@ -116,10 +116,6 @@ roles:
       provider: fal
       model_id: qwen3-vl                # placeholder until M0
       price_per_call: 0.004
-    premium:
-      provider: anthropic
-      model_id: claude-sonnet
-      price_per_call: 0.01
 
 # Filled by M0 spike:
 m0_results:

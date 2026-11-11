@@ -100,7 +100,7 @@ The MCP stdio server is registered as a `context_servers` entry in `~/.config/ch
 }
 ```
 
-Zero changes to AOE code. Provider keys travel through the **process env**: `ProviderKeys::from_env()` reads eight keys from the `context_servers.env` block, empty strings treated as absent. Keys are never logged and never written to the database.
+Zero changes to AOE code. Provider keys travel through the **process env**: `ProviderKeys::from_env()` reads seven keys from the `context_servers.env` block, empty strings treated as absent. Keys are never logged and never written to the database.
 
 `main.rs` opens Postgres lazily: `Store::connect` (§7) is called by the stateful tools (M2).
 
@@ -193,7 +193,7 @@ Path rule: every path inside `avatar.json` and `identity_model.json` is **relati
 
 ## 6. Configs (`config/`) — ✅
 
-- **`models.yaml`**: `defaults` (tier=standard) + 8 roles (`avatar_canon`, `keyframe`, `talk`, `broll`, `broll_reference`, `tts`, `word_timing`, `qc_judge`) with placeholder models (fal/elevenlabs/anthropic) and hypothetical prices; `avatar_canon` defines `standard` and `premium`. The `m0_results` section (watermark_check, moderation_threshold, blind_test_winner) is empty until M0. `ModelsConfig::resolve(role, tier)` — working.
+- **`models.yaml`**: `defaults` (tier=standard) + 8 roles (`avatar_canon`, `keyframe`, `talk`, `broll`, `broll_reference`, `tts`, `word_timing`, `qc_judge`) with placeholder models (fal/elevenlabs) and hypothetical prices; `avatar_canon` defines `standard` and `premium`, `qc_judge` defines `draft` and `standard`. The `m0_results` section (watermark_check, moderation_threshold, blind_test_winner) is empty until M0. `ModelsConfig::resolve(role, tier)` — working.
 - **`platforms.yaml`**: youtube_shorts (1080×1920, 30 fps, ≤180 s, −14 LUFS, word-level ASS, safe area 0.12/0.18), youtube_long (1920×1080, chapters from script), vertical_generic (1080×1920, ≤90 s); `export.ai_disclosure_default: true`, `auto_publish: false`.
 - **`settings.yaml` + `settings.rs`**: the three runtime knobs (`default_tier`, `project_budget_usd`, `max_concurrency`) have exactly one home. `Settings::load(path)` = defaults → optional YAML → `CHA0S_MEDIA_*` env, then `validate()` (budget > 0 and finite, concurrency ≥ 1). Budget and concurrency live only in `settings.yaml`. `ProviderKeys::from_env()` reads eight keys from the process env.
 - **Loaders**: `ModelsConfig::from_path` / `from_yaml_str`, `PlatformsConfig::from_path` / `from_yaml_str`, `Settings::from_path` / `load`. `ModelsConfig::resolve` falls back to `defaults.tier` when a role has no entry for the requested tier (`avatar_canon` defines `standard` and `premium`).
@@ -332,12 +332,11 @@ Every row names symbols that exist in the tree; the milestone is the tag their `
 5. **Music is optional** — absent from materials → the video is validly assembled without it.
 6. **No auto-publishing** — the server exports a package; the operator uploads.
 7. **AI-disclosure is on by default** in metadata.json; removal is an explicit decision.
-8. **The registry carries fal, elevenlabs, fish, byteplus and anthropic models** — one provider per role, priced per unit.
-9. **Language is Rust** (rmcp Tier-1); providers over REST (reqwest); heavy ML is ONNX (`ort`) or API.
-10. **State is Postgres** (one contour with the agent via kb/database); pgvector for identity scores; DSN is mandatory once a stateful tool lands.
-11. **ArcFace uses open buffalo_l weights** (InsightFace); the per-character hook is `IdentityModel` + per-avatar thresholds.
-12. **The project is monolingual — Rust.**
-13. **ArcFace-first identity pipeline** (§4.5): the numeric lock is built first and grounds the text; the text description is produced by a vision channel over cluster artifacts and validated by reverse verification; it never precedes the numbers. **Transports**: the multimodal agent (default, round-trip via `identity_json` + `verification_json`) and cloud vision (M0/M2).
+8. **Language is Rust** (rmcp Tier-1); providers over REST (reqwest); heavy ML is ONNX (`ort`) or API.
+9. **State is Postgres** (one contour with the agent via kb/database); pgvector for identity scores; DSN is mandatory once a stateful tool lands.
+10. **ArcFace uses open buffalo_l weights** (InsightFace); the per-character hook is `IdentityModel` + per-avatar thresholds.
+11. **The project is monolingual — Rust.**
+12. **ArcFace-first identity pipeline** (§4.5): the numeric lock is built first and grounds the text; the text description is produced by a vision channel over cluster artifacts and validated by reverse verification; it never precedes the numbers. **Transports**: the multimodal agent (default, round-trip via `identity_json` + `verification_json`) and cloud vision (M0/M2).
 
 ---
 

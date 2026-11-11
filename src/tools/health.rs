@@ -105,7 +105,6 @@ pub async fn preflight() -> PreflightReport {
         KeyStatus { name: "FISH_API_KEY".into(), present: keys.fish_api_key.is_some() },
         KeyStatus { name: "HEDRA_API_KEY".into(), present: keys.hedra_api_key.is_some() },
         KeyStatus { name: "BYTEPLUS_API_KEY".into(), present: keys.byteplus_api_key.is_some() },
-        KeyStatus { name: "ANTHROPIC_API_KEY".into(), present: keys.anthropic_api_key.is_some() },
         KeyStatus { name: "KLING_ACCESS_KEY".into(), present: keys.kling_access_key.is_some() },
         KeyStatus { name: "KLING_SECRET_KEY".into(), present: keys.kling_secret_key.is_some() },
     ];
