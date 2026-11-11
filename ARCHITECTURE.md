@@ -23,6 +23,8 @@ Markers:
 
 `avatar-media-mcp` is a Rust MCP server (cargo crate, edition 2024) — the hands of the CHA0S AOE IDE agent for generative media with avatars. The agent is the brain (script, dialogue, approvals); the server executes everything that costs money or touches files: stores avatars, generates voiceover/frames/clips through external models, assembles the final cut through ffmpeg, tracks spend, and refuses to exceed the budget.
 
+**The server is provider-neutral.** Models are data in `config/models.yaml` (role → tier → provider/model/price), and every provider call goes through the traits in `src/providers/base.rs`. Pipeline stages that call a provider take a `Tier`; the adapter is chosen from the registry, so no stage names a vendor. The same holds for the other axes: avatar consent type, language, platform profile and output format are data, not code.
+
 **State today:** the identity core (mathematics + local ArcFace inference + reference clustering + the text-channel contract) works and is tested; the face-swap pipeline (§10, FS1) works; `avatar_create` is a live MCP tool that produces `avatar.json` + an identity model from a photo set; the data skeleton (domain types, configs, Postgres schema, cache, ffmpeg availability check) is in place. The generation pipeline — TTS, keyframes, TALK, BROLL, assembly — is stubbed at M2–M6, and 14 of the 17 registered MCP tools answer with an explicit "planned for M<n>".
 
 The engineering idea everything rests on:
@@ -235,9 +237,11 @@ The AOE agent reads these tables directly through `kb`/`database`; the `cost_led
 
 ## 9. Providers (`src/providers/`)
 
+**Provider neutrality.** The traits are the only surface pipeline code sees. `config/models.yaml` maps role → tier → provider/model/price; `ProviderRegistry::entry(role, tier)` returns that entry; `provider(name)` is the constructor slot and bails until the adapters land. A vendor name appears in three places: an adapter file, the registry config and the key list in `config/settings.rs`. Adding a provider is a new file that implements the traits plus a registry entry — no pipeline, domain or tool change.
+
 - **`base.rs`** ✅ — five traits: `ImageProvider` (prompt + negative + reference images + w/h + seed), `VideoProvider` (prompt, first_frame, duration, with_audio), `AvatarVideoProvider` (frame + audio + motion_prompt), `TtsProvider` (synthesize → audio + `WordTiming`; clone_voice), `JudgeProvider` (judge_identity → `JudgeVerdict`). All async-trait.
 - **`registry.rs`** ◐ — `ProviderRegistry` (models + keys + reqwest client), `entry(role, tier)` works; `provider(name)` bails until the M1/M2 constructors land.
-- **`fal.rs` / `elevenlabs.rs` / `fish.rs` / `byteplus.rs`** — structs with `http` + `key` fields; REST client implementation: M1–M2.
+- **`fal.rs` / `elevenlabs.rs` / `fish.rs` / `byteplus.rs`** — adapter files: structs with `http` + `key` fields; REST client implementation: M1–M2. Each implements the traits above and is selected by name from the registry.
 
 ---
 
@@ -336,7 +340,8 @@ Every row names symbols that exist in the tree; the milestone is the tag their `
 9. **State is Postgres** (one contour with the agent via kb/database); pgvector for identity scores; DSN is mandatory once a stateful tool lands.
 10. **ArcFace uses open buffalo_l weights** (InsightFace); the per-character hook is `IdentityModel` + per-avatar thresholds.
 11. **The project is monolingual — Rust.**
-12. **ArcFace-first identity pipeline** (§4.5): the numeric lock is built first and grounds the text; the text description is produced by a vision channel over cluster artifacts and validated by reverse verification; it never precedes the numbers. **Transports**: the multimodal agent (default, round-trip via `identity_json` + `verification_json`) and cloud vision (M0/M2).
+12. **Provider neutrality**: models are data in `config/models.yaml`; every provider call goes through the traits in `src/providers/base.rs`; a vendor name lives only in an adapter file, the registry config and the key list.
+13. **ArcFace-first identity pipeline** (§4.5): the numeric lock is built first and grounds the text; the text description is produced by a vision channel over cluster artifacts and validated by reverse verification; it never precedes the numbers. **Transports**: the multimodal agent (default, round-trip via `identity_json` + `verification_json`) and cloud vision (M0/M2).
 
 ---
 
@@ -354,3 +359,4 @@ Every row names symbols that exist in the tree; the milestone is the tag their `
 - `tokio::time::timeout` returns control to the agent at 120 s (`faceswap`) and 900 s (`avatar_create`); the blocking ONNX task runs to completion.
 - `qc::thresholds_for_avatar` applies `IdentityModel.identity_threshold` to the encoder space.
 - `avatar_create` and the CLI resolve `models/` and `avatars/` relative to the process cwd.
+- No vendor name appears in `src/pipeline/`, `src/domain/` or `src/tools/`: those layers see traits and registry entries only.
