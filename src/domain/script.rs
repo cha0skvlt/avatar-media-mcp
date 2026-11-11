@@ -1,4 +1,4 @@
-//! Script schema written by the IDE agent (ARCHITECTURE.md 5.2).
+//! Script schema written by the IDE agent.
 //!
 //! Validation rules enforced by the server: TALK 3–12 s, shorts rhythm 2–5 s,
 //! hook in the first shot, ≤150–170 wpm, speaking ∈ cast, voice configured.

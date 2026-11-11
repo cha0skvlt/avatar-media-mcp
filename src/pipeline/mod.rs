@@ -1,4 +1,4 @@
-//! Pipeline stages (ARCHITECTURE.md 3, 7, 8, 10, 11).
+//! Pipeline stages.
 //!
 //! Order: audio first → keyframes → animatic → shot render → assemble.
 //! Every stage is idempotent and cached by hash; retries ≤2 per shot.

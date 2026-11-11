@@ -1,4 +1,4 @@
-//! Assembly stage (ARCHITECTURE.md 3F, 10).
+//! Assembly stage.
 //!
 //! Deterministic ffmpeg: concat, J/L cuts, word-level ASS subtitles in
 //! safe-area, unified color grade + grain, music with sidechain ducking,
@@ -10,7 +10,7 @@ pub async fn assemble(
     _platform: &str,
 ) -> anyhow::Result<std::path::PathBuf> {
     // M2 (animatic) / M6 (full).
-    unimplemented!("M2")
+    anyhow::bail!("assemble lands with M2 (ffmpeg argv builders + concat)")
 }
 
 /// Export package: exports/<platform>.mp4 + metadata.json
@@ -20,5 +20,5 @@ pub async fn export_package(
     _platform: &str,
 ) -> anyhow::Result<std::path::PathBuf> {
     // M6.
-    unimplemented!("M6")
+    anyhow::bail!("export_package lands with M6 (metadata.json + ai_disclosure)")
 }

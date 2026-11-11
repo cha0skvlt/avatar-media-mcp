@@ -1,25 +1,31 @@
-//! MCP stdio server (M1 skeleton, first real tool: `faceswap`).
+//! MCP stdio server (M1): `faceswap` and `avatar_create` are live; the rest
+//! of the M1–M7 tool surface answers with honest "not implemented yet"
+//! errors so the contour is visible to the agent.
 //!
 //! Run: `cargo run --features local-identity --bin avatar-media-mcp`
-//! with `cwd = avatar-media-mcp` and `ORT_DYLIB_PATH=models/ort/lib/…`
-//! (ort `load-dynamic` reads the env var directly).
-//!
-//! The tool wraps the same `SwapEngine::swap_face` contract as the CLI
-//! binary `src/bin/faceswap.rs` — one implementation, two entry points.
+//! with `cwd = avatar-media-mcp` and `ORT_DYLIB_PATH=models/ort/lib/…`.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use anyhow::Context;
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::router::tool::ToolRouter,
-    model::{
-        CallToolResult, Content, ServerCapabilities, ServerInfo,
-    },
+    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
 
-#[derive(serde::Deserialize, rmcp::schemars::JsonSchema)]
+use avatar_media_mcp::identity::arcface::FaceEngine;
+use avatar_media_mcp::infra::paths::confine_output;
+use avatar_media_mcp::pipeline::faceswap::SwapEngine;
+use avatar_media_mcp::tools::avatar::{AvatarCreateArgs, avatar_create};
+use avatar_media_mcp::tools::health::preflight;
+
+/// A hung ONNX session must not hang the agent forever.
+const SWAP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const AVATAR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+
+#[derive(schemars::JsonSchema, serde::Deserialize)]
 struct FaceswapArgs {
     /// Path of the SOURCE image whose face identity is transferred.
     source_path: String,
@@ -29,33 +35,33 @@ struct FaceswapArgs {
     out_path: String,
 }
 
-use avatar_media_mcp::identity::arcface::FaceEngine;
-use avatar_media_mcp::pipeline::faceswap::SwapEngine;
-
 #[derive(Clone)]
 struct AvatarMediaServer {
     engine: Arc<Mutex<Option<FaceEngine>>>,
     swap: Arc<Mutex<Option<SwapEngine>>>,
-    tool_router: Arc<ToolRouter<AvatarMediaServer>>,
+    tool_router: Arc<ToolRouter<Self>>,
 }
 
 /// Lazily build the shared ORT environment + both model bundles on the
-/// first call; a failed load poisons the option back to None so the next
-/// call retries (e.g. after the operator fixes ORT_DYLIB_PATH).
+/// first call; a failed load leaves None so the next call retries.
 fn with_engines<T>(
     engine: &Mutex<Option<FaceEngine>>,
     swap: &Mutex<Option<SwapEngine>>,
     f: impl FnOnce(&mut FaceEngine, &mut SwapEngine) -> anyhow::Result<T>,
 ) -> Result<T, McpError> {
-    let mut engine_guard = engine.lock().map_err(|e| McpError::internal_error(e.to_string(), None))?;
-    let mut swap_guard = swap.lock().map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let mut engine_guard = engine
+        .lock()
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let mut swap_guard = swap
+        .lock()
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
     if engine_guard.is_none() {
-        let e = FaceEngine::load(std::path::Path::new("models/insightface/buffalo_l"))
+        let e = FaceEngine::load(Path::new("models/insightface/buffalo_l"))
             .map_err(|err| McpError::internal_error(format!("face engine load: {err}"), None))?;
         *engine_guard = Some(e);
     }
     if swap_guard.is_none() {
-        let s = SwapEngine::load(std::path::Path::new("models/faceswap"))
+        let s = SwapEngine::load(Path::new("models/faceswap"))
             .map_err(|err| McpError::internal_error(format!("swap engine load: {err}"), None))?;
         *swap_guard = Some(s);
     }
@@ -63,8 +69,11 @@ fn with_engines<T>(
         .map_err(|err| McpError::internal_error(err.to_string(), None))
 }
 
-fn err(e: McpError) -> McpError {
-    e
+fn not_yet(tool: &str, milestone: &str) -> McpError {
+    McpError::invalid_params(
+        format!("tool `{tool}` is planned for milestone {milestone}; not implemented yet"),
+        None,
+    )
 }
 
 #[tool_router]
@@ -77,22 +86,20 @@ impl AvatarMediaServer {
         }
     }
 
-    /// Swap the identity from `source_path` (its main face) onto the face
-    /// in `target_path`, save PNG to `out_path`.
+    /// FS1 face swap (live).
     #[tool(description = "Face swap: transfer the identity from the source image's main face onto the face in the target image (pose, hair, body and background of the target are kept). Saves a PNG and reports the detection + timing. Exactly one face (best-scoring detection) is swapped.")]
-    async fn faceswap(
-        &self,
-        rmcp::handler::server::tool::Parameters(args): rmcp::handler::server::tool::Parameters<
-            FaceswapArgs,
-        >,
-    ) -> Result<CallToolResult, McpError> {
+    async fn faceswap(&self, rmcp::handler::server::tool::Parameters(args): rmcp::handler::server::tool::Parameters<FaceswapArgs>) -> Result<CallToolResult, McpError> {
         let src = std::path::PathBuf::from(&args.source_path);
         let tgt = std::path::PathBuf::from(&args.target_path);
-        let out = std::path::PathBuf::from(&args.out_path);
-        // ort sessions are not Send-friendly across await points; run the
-        // whole pipeline inside one blocking task from the engines' view.
+        // Writes are confined to the workspace: an injected call must not be
+        // able to overwrite arbitrary files.
+        let workspace = std::env::current_dir()
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let out = confine_output(std::path::Path::new(&args.out_path), &workspace)
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
         let engine = self.engine.clone();
         let swap = self.swap.clone();
+        let started = std::time::Instant::now();
         let report = tokio::task::spawn_blocking(move || {
             with_engines(&engine, &swap, |engine, swap| {
                 let src_faces = engine.embed_image(&src)?;
@@ -103,9 +110,7 @@ impl AvatarMediaServer {
                 anyhow::ensure!(!detections.is_empty(), "no face in target {}", tgt.display());
                 let det = &detections[0];
 
-                let target = image::open(&tgt)
-                    .with_context(|| format!("open {}", tgt.display()))?
-                    .to_rgb8();
+                let target = avatar_media_mcp::infra::image_io::open_rgb8(&tgt)?;
                 let result = swap.swap_face(&target, det.bbox, det.kps, &source_embedding)?;
                 result.save(&out)?;
                 Ok(format!(
@@ -122,11 +127,134 @@ impl AvatarMediaServer {
                     out.display(),
                 ))
             })
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("swap task: {e}"), None))?
-        .map_err(err)?;
+        });
+        let report = tokio::time::timeout(SWAP_TIMEOUT, report)
+            .await
+            .map_err(|_| {
+                McpError::internal_error(
+                    format!("faceswap exceeded {}s", SWAP_TIMEOUT.as_secs()),
+                    None,
+                )
+            })?
+            .map_err(|e| McpError::internal_error(format!("swap task: {e}"), None))?
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        tracing::info!(elapsed_ms = started.elapsed().as_millis() as u64, "faceswap done");
         Ok(CallToolResult::success(vec![Content::text(report)]))
+    }
+
+    /// avatar_create: the M1 end-to-end path (live).
+    #[tool(description = "Create an avatar from reference photos. Three calls: (1) no identity_json → returns the cluster representatives + numeric summary; (2) identity_json → returns the verification prompt; (3) identity_json + verification_json {match_score, mismatches} → writes avatars/<slug>/{avatar.json, identity_model.json, consent.json, refs/NN.jpg} atomically. Photos are normalized and quality-gated; an approved canon is never replaced without force=true. Consent must be self | third_party (needs a valid consent.json) | fictional.")]
+    async fn avatar_create(
+        &self,
+        rmcp::handler::server::tool::Parameters(args): rmcp::handler::server::tool::Parameters<
+            AvatarCreateArgs,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        let slug = args.slug.clone();
+        let started = std::time::Instant::now();
+        let report = tokio::time::timeout(
+            AVATAR_TIMEOUT,
+            tokio::task::spawn_blocking(move || avatar_create(&args)),
+        )
+        .await
+        .map_err(|_| {
+            McpError::internal_error(
+                format!("avatar_create exceeded {}s", AVATAR_TIMEOUT.as_secs()),
+                None,
+            )
+        })?
+        .map_err(|e| McpError::internal_error(format!("avatar_create task: {e}"), None))?
+        .map_err(|e: anyhow::Error| McpError::internal_error(e.to_string(), None))?;
+        tracing::info!(
+            slug = %slug,
+            clusters = report.clusters,
+            flagged = report.verification_flagged,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "avatar_create done"
+        );
+        let text = serde_json::to_string_pretty(&report)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    // ---- Planned surface: honest stubs, tagged with their milestone ----
+
+    #[tool(description = "List avatars with status. Planned for M1 (post-skeleton).")]
+    async fn avatar_list(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("avatar_list", "M1"))
+    }
+
+    #[tool(description = "Avatar status: canon sheet, voice, prompt blocks. Planned for M1 (post-skeleton).")]
+    async fn avatar_status(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("avatar_status", "M1"))
+    }
+
+    #[tool(description = "Operator approval gate for the canon sheet. Planned for M1 (post-skeleton).")]
+    async fn avatar_approve_canon(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("avatar_approve_canon", "M1"))
+    }
+
+    #[tool(description = "Create a project from a brief. Planned for M1 (post-skeleton).")]
+    async fn project_create(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("project_create", "M1"))
+    }
+
+    #[tool(description = "Submit a script for estimate/approval. Planned for M1 (post-skeleton).")]
+    async fn script_submit(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("script_submit", "M1"))
+    }
+
+    #[tool(description = "Cost estimate per tier. Planned for M2 (needs ledger).")]
+    async fn script_estimate(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("script_estimate", "M2"))
+    }
+
+    #[tool(description = "Mandatory approval gate before any spend. Planned for M2.")]
+    async fn script_approve(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("script_approve", "M2"))
+    }
+
+    #[tool(description = "Start rendering a project (returns job_id). Planned for M3.")]
+    async fn render_start(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("render_start", "M3"))
+    }
+
+    #[tool(description = "Poll render job status. Planned for M3.")]
+    async fn job_status(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("job_status", "M3"))
+    }
+
+    #[tool(description = "Cancel a render job. Planned for M5.")]
+    async fn job_cancel(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("job_cancel", "M5"))
+    }
+
+    #[tool(description = "Regenerate one shot. Planned for M5.")]
+    async fn shot_regenerate(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("shot_regenerate", "M5"))
+    }
+
+    #[tool(description = "Assemble the final cut with ffmpeg. Planned for M2.")]
+    async fn assemble(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("assemble", "M2"))
+    }
+
+    #[tool(description = "Export mp4 + metadata.json package. Planned for M6.")]
+    async fn export_package(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("export_package", "M6"))
+    }
+
+    #[tool(description = "Spend ledger query. Planned for M2.")]
+    async fn cost_ledger(&self) -> Result<CallToolResult, McpError> {
+        Err(not_yet("cost_ledger", "M2"))
+    }
+
+    #[tool(description = "Preflight: config files, provider keys (presence only), ORT dylib, model directories, ffmpeg, avatars directory, DATABASE_URL. No network calls.")]
+    async fn providers_check(&self) -> Result<CallToolResult, McpError> {
+        let report = preflight().await;
+        let text = serde_json::to_string_pretty(&report)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 }
 
@@ -134,9 +262,7 @@ impl AvatarMediaServer {
 impl ServerHandler for AvatarMediaServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
     }
@@ -145,9 +271,13 @@ impl ServerHandler for AvatarMediaServer {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .with_writer(std::io::stderr)
         .init();
+    tracing::info!("avatar-media-mcp starting");
     let server = AvatarMediaServer::new();
     let running = server.serve(rmcp::transport::stdio()).await?;
     running.waiting().await?;

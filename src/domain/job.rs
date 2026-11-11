@@ -1,8 +1,8 @@
-//! Render job state (ARCHITECTURE.md 9.2).
+//! Render job state.
 //!
 //! Long operations: render_start → job_id; job_status polls stages, percent,
-//! spent, links. State in SQLite; restart marks stale jobs and resumes by
-//! provider request_id.
+//! spent, links. State in Postgres (the `jobs` table); restart marks stale
+//! jobs and resumes by provider request_id.
 
 use serde::{Deserialize, Serialize};
 

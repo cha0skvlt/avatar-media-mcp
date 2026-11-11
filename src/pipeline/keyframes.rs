@@ -1,4 +1,4 @@
-//! Keyframe stage (ARCHITECTURE.md 3D).
+//! Keyframe stage.
 //!
 //! Image model + avatar references → one frame per shot, generated in the
 //! target aspect ratio (never cropped later). QC-1 gates identity.
@@ -10,5 +10,5 @@ pub async fn generate_keyframes(
     _tier: crate::config::models::Tier,
 ) -> anyhow::Result<Vec<std::path::PathBuf>> {
     // M3.
-    unimplemented!("M3")
+    anyhow::bail!("generate_keyframes lands with M3 (image provider + QC-1)")
 }

@@ -1,16 +1,21 @@
 //! Minimal avatar build: normalize photos → embed → dedupe → write
-//! avatars/<slug>/ with avatar.json, consent.json, identity/face_embedding.json.
+//! `avatars/<slug>/` through the same `AvatarStore` the MCP tool uses.
 //!
 //! Usage: cargo run --features local-identity --bin avatar_build -- \
-//!   --name ksenia --photos ../Ksenia --consent self
+//!   --name <slug> --photos <dir> --consent self
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use avatar_media_mcp::domain::avatar::{Avatar, Consent, ConsentSubject, Identity, IdentityModel, PromptBlocks, RefBinding, Refs, SCHEMA_VERSION};
+use avatar_media_mcp::domain::avatar::{
+    Avatar, Consent, ConsentSubject, Identity, IdentityModel, PromptBlocks, RefBinding, Refs,
+    SCHEMA_VERSION,
+};
 use avatar_media_mcp::identity::arcface::FaceEngine;
-use avatar_media_mcp::identity::embeddings::{cosine_similarity_checked, EmbeddingSource};
+use avatar_media_mcp::identity::embeddings::cosine_similarity_checked;
+use avatar_media_mcp::infra::avatar_store::{AvatarStore, CONSENT_FILE};
+use avatar_media_mcp::pipeline::avatar_build::normalize_photo;
 
 fn main() -> Result<()> {
     let mut name = String::new();
@@ -35,12 +40,12 @@ fn main() -> Result<()> {
         bail!("usage: avatar_build --name <slug> --photos <dir> [--consent self|fictional]");
     }
 
-    // 1. Collect + normalize photos into refs/.
-    let avatar_dir = PathBuf::from("avatars").join(&name);
-    let refs_dir = avatar_dir.join("refs");
+    // 1. Collect photos and normalize them into refs/ (the canon lives inside
+    //    the avatar directory — no absolute paths to the source folder).
+    let store = AvatarStore::default();
+    AvatarStore::validate_slug(&name)?;
+    let refs_dir = store.refs_dir(&name);
     std::fs::create_dir_all(&refs_dir)?;
-    let identity_dir = avatar_dir.join("identity");
-    std::fs::create_dir_all(&identity_dir)?;
 
     let mut files: Vec<PathBuf> = std::fs::read_dir(&photos_dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -60,17 +65,8 @@ fn main() -> Result<()> {
     let mut kept: Vec<(String, Vec<f32>)> = Vec::new();
     let mut rejected: Vec<String> = Vec::new();
     for f in &files {
-        // Normalize: RGB, long side ≤2048, EXIF stripped (image crate decode drops it).
-        let img = image::open(f).with_context(|| f.display().to_string())?.to_rgb8();
-        let (w, h) = (img.width(), img.height());
-        let img = if w.max(h) > 2048 {
-            let s = 2048.0 / w.max(h) as f32;
-            image::imageops::resize(&img, (w as f32 * s) as u32, (h as f32 * s) as u32, image::imageops::FilterType::Triangle)
-        } else {
-            img
-        };
-        let norm_path = refs_dir.join(format!("{:02}.png", kept.len() + rejected.len() + 1));
-        img.save(&norm_path)?;
+        let norm_path = refs_dir.join(format!("{:02}.jpg", kept.len() + rejected.len() + 1));
+        normalize_photo(f, &norm_path)?;
 
         let faces = engine.embed_image(&norm_path)?;
         if faces.is_empty() {
@@ -84,18 +80,24 @@ fn main() -> Result<()> {
             continue;
         }
         let v = faces[0].vector.clone();
-        // Dedupe: cosine >0.95 against an already-kept vector = duplicate.
-        if kept.iter().any(|(_, kv)| cosine_similarity_checked(&kv, &v).map(|c| c.get()).unwrap_or(0.0) > 0.95) {
+        // Same near-duplicate rule as the MCP tool: only identical frames go.
+        if kept
+            .iter()
+            .any(|(_, kv)| cosine_similarity_checked(kv, &v).map(|c| c.get()).unwrap_or(0.0) > 0.9999)
+        {
             rejected.push(format!("{}: duplicate", f.display()));
             std::fs::remove_file(&norm_path)?;
             continue;
         }
         // Re-number refs sequentially for kept photos.
-        let final_path = refs_dir.join(format!("{:02}.png", kept.len() + 1));
+        let final_path = refs_dir.join(format!("{:02}.jpg", kept.len() + 1));
         if norm_path != final_path {
             std::fs::rename(&norm_path, &final_path)?;
         }
-        kept.push((final_path.file_name().unwrap().to_string_lossy().to_string(), v));
+        kept.push((
+            final_path.file_name().unwrap().to_string_lossy().to_string(),
+            v,
+        ));
     }
     anyhow::ensure!(!kept.is_empty(), "no usable photos");
 
@@ -107,21 +109,10 @@ fn main() -> Result<()> {
         }
     }
     sims.sort_by(|a, b| a.total_cmp(b));
-    let median = sims[sims.len() / 2];
+    // One usable photo has no pair to compare against: the anchor is 1.0.
+    let median = if sims.is_empty() { 1.0 } else { sims[sims.len() / 2] };
 
-    // 4. Write identity/face_embedding.json.
-    let model = IdentityModel {
-        face_embeddings: kept.iter().map(|(n, v)| (n.clone(), v.clone())).collect(),
-        face_model: None,
-        body_model: None,
-        identity_threshold: Some(median - 0.10), // conservative per-avatar pass floor
-    };
-    std::fs::write(
-        identity_dir.join("face_embedding.json"),
-        serde_json::to_vec_pretty(&model)?,
-    )?;
-
-    // 5. consent.json + avatar.json.
+    // 4. consent.json + avatar.json + identity_model.json via the store.
     let consent_doc = Consent {
         subject: consent,
         statement: "CLI test build; operator asserts rights to the reference images".into(),
@@ -130,59 +121,70 @@ fn main() -> Result<()> {
         written_consent_path: None,
     };
     std::fs::write(
-        avatar_dir.join("consent.json"),
+        store.dir(&name).join(CONSENT_FILE),
         serde_json::to_vec_pretty(&consent_doc)?,
     )?;
+
+    let model = IdentityModel {
+        face_embeddings: kept
+            .iter()
+            .map(|(n, v)| (format!("refs/{n}"), v.clone()))
+            .collect(),
+        face_model: None,
+        body_model: None,
+        // Same band as the clustering path: a lucky pair cannot unlock the gate.
+        identity_threshold: Some((median - 0.10).clamp(0.55, 0.93)),
+    };
 
     let avatar = Avatar {
         schema_version: SCHEMA_VERSION,
         slug: name.clone(),
         display_name: name.clone(),
-        consent_ref: "consent.json".into(),
+        consent_ref: CONSENT_FILE.into(),
+        // The CLI has no vision channel: it must not invent a biometric
+        // description. The numeric lock is the canon until a channel fills it.
         identity: Identity {
-            apparent_age_range: "25-30".into(),
-            gender_presentation: "female".into(),
-            face_shape: "oval, tapering to a pointed chin".into(),
-            skin_tone: "fair, warm undertone".into(),
-            eyes: "almond, slightly hooded, grey-blue".into(),
-            brows: "natural, medium thickness".into(),
-            nose: "straight, narrow bridge, slightly rounded tip".into(),
-            lips: "medium, defined cupid's bow".into(),
+            apparent_age_range: String::new(),
+            gender_presentation: String::new(),
+            face_shape: String::new(),
+            skin_tone: String::new(),
+            eyes: String::new(),
+            brows: String::new(),
+            nose: String::new(),
+            lips: String::new(),
             hair: avatar_media_mcp::domain::avatar::Hair {
-                color: "auburn/copper".into(),
-                length: "mid-back".into(),
-                style: "dreadlocks".into(),
+                color: String::new(),
+                length: String::new(),
+                style: String::new(),
             },
             facial_hair: None,
-            distinguishing_marks: vec!["black geometric tattoo right shoulder".into()],
-            build: "slim, ectomorph".into(),
+            distinguishing_marks: vec![],
+            build: String::new(),
         },
         persona: None,
         voice: None,
-        prompt_blocks: avatar_media_mcp::domain::avatar::PromptBlocks {
+        prompt_blocks: PromptBlocks {
             identity: format!(
-                "A woman with shoulder-length auburn dreadlocks, {} reference photos, median self-cosine {:.3}",
-                kept.len(), median
+                "The same person in every frame. {} reference photos, median self-cosine {:.3}",
+                kept.len(),
+                median
             ),
-            negative: "different person, altered face shape, extra fingers, beauty-filter skin".into(),
-            do_not_change: vec!["face shape".into(), "hair color".into(), "eye color".into()],
-            ref_binding: avatar_media_mcp::domain::avatar::RefBinding {
+            negative: "different person, altered face shape, changed eye colour, beauty-filter skin, extra fingers, deformed hands".into(),
+            do_not_change: vec![],
+            ref_binding: RefBinding {
                 gemini_image: None,
                 omni_video: None,
                 generic: "same person as in the reference image(s)".into(),
             },
         },
-        refs: avatar_media_mcp::domain::avatar::Refs {
+        refs: Refs {
             primary: format!("refs/{}", kept[0].0),
             set: kept.iter().map(|(n, _)| format!("refs/{n}")).collect(),
         },
         created_at: chrono::Utc::now().to_rfc3339(),
         canon_approved_at: None,
     };
-    std::fs::write(
-        avatar_dir.join("avatar.json"),
-        serde_json::to_vec_pretty(&avatar)?,
-    )?;
+    store.save(&avatar, &model)?;
 
     println!(
         "avatar '{name}': {} refs kept, {} rejected, median self-cosine {:.3}, threshold {:.3}\nrejected: {}",

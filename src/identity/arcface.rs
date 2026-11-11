@@ -81,6 +81,9 @@ fn prepare_detector_input(
     Ok((canvas, scale, rw, rh))
 }
 
+/// (score, bbox, 5 landmarks) in 640×640 detector-canvas coordinates.
+type RawDetection = (f32, [f32; 4], [[f32; 2]; 5]);
+
 pub struct FaceEngine {
     det: ort::session::Session,
     rec: ort::session::Session,
@@ -118,9 +121,7 @@ impl FaceEngine {
 
     /// Embed every face found in the image, largest (main person) first.
     pub fn embed_image(&mut self, image_path: &std::path::Path) -> Result<Vec<FaceEmbedding>> {
-        let img = image::open(image_path)
-            .with_context(|| format!("open {}", image_path.display()))?
-            .to_rgb8();
+        let img = crate::infra::image_io::open_rgb8(image_path)?;
         let (small, scale, valid_w, valid_h) = prepare_detector_input(&img)?;
         let faces = self.detect(&small, scale, valid_w, valid_h)?;
         let mut out = Vec::with_capacity(faces.len());
@@ -143,9 +144,7 @@ impl FaceEngine {
         &mut self,
         image_path: &std::path::Path,
     ) -> Result<Vec<DetectedFaceBox>> {
-        let img = image::open(image_path)
-            .with_context(|| format!("open {}", image_path.display()))?
-            .to_rgb8();
+        let img = crate::infra::image_io::open_rgb8(image_path)?;
         let (small, scale, valid_w, valid_h) = prepare_detector_input(&img)?;
         let (source_w, source_h) = (img.width() as f32, img.height() as f32);
         let raw = self.detect_raw(&small, valid_w, valid_h)?;
@@ -208,7 +207,7 @@ impl FaceEngine {
         small: &image::RgbImage,
         valid_w: u32,
         valid_h: u32,
-    ) -> Result<Vec<(f32, [f32; 4], [[f32; 2]; 5])>> {
+    ) -> Result<Vec<RawDetection>> {
         let (rw, rh) = (small.width() as usize, small.height() as usize);
         anyhow::ensure!(rw > 0 && rh > 0, "SCRFD input image is empty");
         anyhow::ensure!(
@@ -233,7 +232,7 @@ impl FaceEngine {
         anyhow::ensure!(outputs.len() == 9, "SCRFD expected exactly 9 outputs, got {}", outputs.len());
 
         let strides = [8usize, 16, 32];
-        let mut all = Vec::<(f32, [f32; 4], [[f32; 2]; 5])>::new();
+        let mut all = Vec::<RawDetection>::new();
 
         // Output order is grouped by KIND, not by stride triplet:
         // [scores s8, s16, s32, boxes s8, s16, s32, kps s8, s16, s32]
@@ -260,7 +259,7 @@ impl FaceEngine {
             let cells = feat_w
                 .checked_mul(feat_h)
                 .context("SCRFD feature map size overflow")?;
-            anyhow::ensure!(cells > 0 && scores.len() % cells == 0,
+            anyhow::ensure!(cells > 0 && scores.len().is_multiple_of(cells),
                 "SCRFD stride-{stride} score count {} is not divisible by feature map {}×{}",
                 scores.len(), feat_w, feat_h);
             let anchors = scores.len() / cells;
@@ -343,7 +342,7 @@ impl FaceEngine {
 
         // Suppress duplicate boxes across anchors and feature-map scales.
         all.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let mut kept: Vec<(f32, [f32; 4], [[f32; 2]; 5])> = Vec::with_capacity(all.len());
+        let mut kept: Vec<RawDetection> = Vec::with_capacity(all.len());
         for candidate in all {
             if kept.iter().all(|prior| bbox_iou(&candidate.1, &prior.1) <= NMS_THRESHOLD) {
                 kept.push(candidate);
@@ -428,7 +427,7 @@ fn scrfd_component_index(
     }
     anyhow::ensure!(component_axes.len() <= 1,
         "ambiguous SCRFD component axis in output shape {shape:?}");
-    if let Some((before, after)) = component_axes.first().copied() {
+    if let Some((_, after)) = component_axes.first().copied() {
         let group = item / after;
         let offset = item % after;
         return Ok(group * components * after + component * after + offset);
@@ -544,13 +543,15 @@ fn solve6(a: &[[f64; 6]; 6], b: &[f64; 6]) -> Result<[f64; 6]> {
         m.swap(col, pivot);
         rhs.swap(col, pivot);
         let d = m[col][col];
+        let pivot_row = m[col];
+        let pivot_rhs = rhs[col];
         for r in 0..6 {
             if r != col {
                 let f = m[r][col] / d;
-                for c in col..6 {
-                    m[r][c] -= f * m[col][c];
+                for (c, value) in m[r].iter_mut().enumerate().skip(col) {
+                    *value -= f * pivot_row[c];
                 }
-                rhs[r] -= f * rhs[col];
+                rhs[r] -= f * pivot_rhs;
             }
         }
     }

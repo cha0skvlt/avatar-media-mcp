@@ -1,4 +1,4 @@
-//! Cost accounting (ARCHITECTURE.md 8).
+//! Cost accounting.
 //!
 //! Ledger entry: provider, model, units (seconds/images/chars), fact vs estimate.
 

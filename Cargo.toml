@@ -16,11 +16,11 @@ schemars = "1.0"
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate"] }
 image = "0.25"
+# block_on wrapper for sync contexts (avatar_create runs inside spawn_blocking)
+futures = { version = "0.3", default-features = false, features = ["executor"] }
 anyhow = "1"
 thiserror = "2"
 figment = { version = "0.10", features = ["yaml", "env"] }
-tokio-retry = "0.3"
-uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 hex = "0.4"
@@ -37,4 +37,4 @@ local-identity = ["dep:ort", "dep:ndarray"]
 
 [dev-dependencies]
 tempfile = "3"
-wiremock = "0.6"
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate"] }

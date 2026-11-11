@@ -1,5 +1,5 @@
 //! Identity decision mathematics: calibration, multi-person assignment, drift,
-//! clip aggregation, and embedding/geometry fusion (ARCHITECTURE.md 4.5, 7, 11).
+//! clip aggregation, and embedding/geometry fusion.
 //!
 //! The core is deterministic and has no database/provider/filesystem access.
 //! All encoder provenance, angle offsets, thresholds, and fitting scales are
@@ -10,10 +10,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::embeddings::{
-    CosineScore, EmbeddingSource, FaceEmbedding, compare_embeddings,
-    cosine_similarity_checked,
-};
+use super::embeddings::{CosineScore, EmbeddingSource, FaceEmbedding, compare_embeddings};
 use super::threed::{GeometryDistance, distance_to_similarity};
 
 /// A threshold in the same numeric space as the score it compares against.
@@ -102,6 +99,13 @@ impl IdentityThresholds {
                 bail!("avatar identity_threshold must be in [-1, 1], got {value}");
             }
             thresholds.pass = ScoreThreshold(value);
+            // A per-avatar pass threshold below the default fail boundary would
+            // otherwise invert the gate: every score >= pass would auto-pass,
+            // including scores the fail boundary was meant to reject. Collapse
+            // the grey zone instead of silently disabling the reject gate.
+            if thresholds.fail.0 > thresholds.pass.0 {
+                thresholds.fail = ScoreThreshold(thresholds.pass.0);
+            }
         }
         Ok(thresholds)
     }
@@ -112,14 +116,14 @@ impl IdentityThresholds {
     }
 
     pub fn validate_source(&self, source: EmbeddingSource) -> Result<()> {
-        if let Some(expected) = self.source {
-            if expected != source {
-                bail!(
-                    "threshold source mismatch: thresholds are for {:?}, score is from {:?}",
-                    expected,
-                    source
-                );
-            }
+        if let Some(expected) = self.source
+            && expected != source
+        {
+            bail!(
+                "threshold source mismatch: thresholds are for {:?}, score is from {:?}",
+                expected,
+                source
+            );
         }
         Ok(())
     }
@@ -265,7 +269,7 @@ pub fn calibrate_thresholds(
     }
 
     let auto_pass_enabled = best_pass.is_some();
-    let auto_fail_enabled = best_fail.is_some();
+    let mut auto_fail_enabled = best_fail.is_some();
     let pass = best_pass.map(|value| value.0).unwrap_or(1.0);
     let mut fail = best_fail.map(|value| value.0).unwrap_or(-1.0);
     if fail > pass {
@@ -274,6 +278,9 @@ pub fn calibrate_thresholds(
         // (fail == pass is allowed: an empty grey zone is a valid outcome —
         // every score is then decided locally and none goes to the judge.)
         fail = -1.0;
+        // The flag must follow the decision: a disabled gate that still
+        // reports `auto_fail_enabled` would make diagnostics lie.
+        auto_fail_enabled = false;
     }
     let diagnostics = CalibrationDiagnostics {
         source,
@@ -427,25 +434,21 @@ fn ln_gamma(value: f64) -> f64 {
 // Shared camera-angle metadata
 // -----------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FaceViewAngle {
     Frontal,
     ThreeQuarter,
     Profile,
+    #[default]
     Unknown,
 }
 
-impl Default for FaceViewAngle {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
-
 fn normalize_angle_score(score: f32, angle: FaceViewAngle, offsets: &BTreeMap<FaceViewAngle, f32>) -> f32 {
-    // Offsets are learned/declared from M0 angle-stratified data. A profile
-    // score that is naturally 0.08 lower gets +0.08 here; absent a calibration
-    // entry, the core does not invent an angle correction.
+    // Offsets are learned/declared from M0 angle-stratified data and are the
+    // expected deficit (negative for a profile, e.g. -0.08). Subtracting the
+    // offset restores the frontal scale. Absent a calibration entry, the core
+    // does not invent an angle correction.
     score - offsets.get(&angle).copied().unwrap_or(0.0)
 }
 
@@ -656,7 +659,7 @@ fn median(values: &[f32]) -> f32 {
     let mut sorted = values.to_vec();
     sorted.sort_by(f32::total_cmp);
     let middle = sorted.len() / 2;
-    if sorted.len() % 2 == 0 {
+    if sorted.len().is_multiple_of(2) {
         (sorted[middle - 1] + sorted[middle]) * 0.5
     } else {
         sorted[middle]
@@ -1012,7 +1015,10 @@ pub struct ClipAggregationResult {
     pub last_valid_score: f32,
     pub within_clip_drop: f32,
     pub robust_slope_per_second: f32,
+    /// Frames marked as artefacts upstream: excluded from the base level.
     pub ignored_artifacts: usize,
+    /// Isolated outliers: kept in the base level, excluded from the trend.
+    pub isolated_outliers: usize,
     pub frames_used_for_trend: usize,
 }
 
@@ -1039,11 +1045,6 @@ pub fn aggregate_clip_frames(
         if !frame.timestamp_seconds.is_finite() {
             bail!("clip frame timestamps must be finite");
         }
-        if let Some(source) = thresholds.source {
-            // A clip score's source is checked by the pipeline before it is
-            // reduced to this scalar; source-specific thresholds remain bound.
-            let _ = source;
-        }
     }
     if ordered.windows(2).any(|pair| pair[1].timestamp_seconds <= pair[0].timestamp_seconds) {
         bail!("clip frame timestamps must be unique and strictly increasing");
@@ -1067,13 +1068,15 @@ pub fn aggregate_clip_frames(
     let base_level_score = CosineScore::new(median(&normalized).clamp(-1.0, 1.0))?;
     let base_level_verdict = stage1_score(base_level_score, thresholds);
 
-    let mut ignored_artifacts = ordered.len() - quality_frames.len();
+    // `ignored_artifacts` counts frames excluded from the BASE LEVEL (marked
+    // upstream). Isolated outliers are still part of the median — they are only
+    // dropped from the trend — so they are reported separately.
+    let ignored_artifacts = ordered.len() - quality_frames.len();
     let isolated = isolated_outlier_indices(
         &normalized,
         config.isolated_outlier_distance,
         config.artifact_consensus_tolerance,
     );
-    ignored_artifacts += isolated.len();
     let trend_frames: Vec<ClipFrameScore> = quality_frames
         .iter()
         .enumerate()
@@ -1158,6 +1161,7 @@ pub fn aggregate_clip_frames(
         within_clip_drop: effective_drop,
         robust_slope_per_second: slope,
         ignored_artifacts,
+        isolated_outliers: isolated.len(),
         frames_used_for_trend: trend_frames.len(),
     })
 }
@@ -1409,8 +1413,8 @@ pub fn fuse_identity_signals(
     model: Option<&FusionModel>,
 ) -> Result<FusionResult> {
     fallback_thresholds.validate_source(embedding_source)?;
-    let embedding_verdict = stage1_score(embedding_score, fallback_thresholds);
     let Some(distance) = geometry_distance else {
+        let embedding_verdict = stage1_score(embedding_score, fallback_thresholds);
         return Ok(FusionResult {
             combined_probability: None,
             verdict: embedding_verdict,
@@ -1420,6 +1424,7 @@ pub fn fuse_identity_signals(
         });
     };
     let Some(model) = model else {
+        let embedding_verdict = stage1_score(embedding_score, fallback_thresholds);
         return Ok(FusionResult {
             combined_probability: None,
             verdict: embedding_verdict,
@@ -1597,7 +1602,10 @@ mod tests {
         ];
         let robust = aggregate_clip_frames(&artifact, &thresholds, &ClipAggregationConfig::default()).unwrap();
         assert_eq!(robust.within_clip_drift, ClipDriftVerdict::None);
-        assert_eq!(robust.ignored_artifacts, 1);
+        // The outlier stays in the base level (median) and leaves the trend.
+        assert_eq!(robust.ignored_artifacts, 0);
+        assert_eq!(robust.isolated_outliers, 1);
+        assert_eq!(robust.frames_used_for_trend, 2);
     }
 
     #[test]
@@ -1663,5 +1671,99 @@ mod tests {
             &IdentityThresholds::for_source(EmbeddingSource::VisionFal),
             Some(&model),
         ).is_err());
+    }
+
+    #[test]
+    fn avatar_pass_threshold_never_inverts_the_gate() {
+        // A per-avatar threshold below the default fail boundary used to leave
+        // pass < fail, so every score >= pass auto-passed — including scores
+        // the fail boundary existed to reject.
+        let thresholds = IdentityThresholds::with_avatar_pass_threshold(
+            EmbeddingSource::ArcFaceOnnx,
+            Some(0.55),
+        )
+        .unwrap();
+        assert!(thresholds.fail.0 <= thresholds.pass.0);
+        // The grey zone collapses to empty: 0.55 passes, 0.54 is rejected.
+        assert!(matches!(
+            stage1_score(CosineScore(0.55), &thresholds),
+            Stage1Verdict::Pass(_)
+        ));
+        assert!(matches!(
+            stage1_score(CosineScore(0.54), &thresholds),
+            Stage1Verdict::Fail(_)
+        ));
+        assert!(IdentityThresholds::with_avatar_pass_threshold(
+            EmbeddingSource::ArcFaceOnnx,
+            Some(1.5)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn beta_quantile_matches_known_distributions() {
+        // Beta(1,1) is uniform: the quantile is the probability itself.
+        for p in [0.05, 0.25, 0.5, 0.75, 0.95] {
+            let q = beta_quantile(p, 1.0, 1.0);
+            assert!((q - p).abs() < 1e-6, "uniform quantile {p} -> {q}");
+        }
+        // Beta(1/2,1/2) is the arcsine distribution: F(x) = 2/pi * asin(sqrt x).
+        // Its median is 0.5 and its 25th percentile is sin^2(pi/8).
+        assert!((beta_quantile(0.5, 0.5, 0.5) - 0.5).abs() < 1e-4);
+        let expected = (std::f64::consts::PI / 8.0).sin().powi(2);
+        assert!((beta_quantile(0.25, 0.5, 0.5) - expected).abs() < 1e-4);
+        // Monotone in the probability.
+        assert!(beta_quantile(0.9, 2.0, 5.0) > beta_quantile(0.1, 2.0, 5.0));
+    }
+
+    #[test]
+    fn hungarian_finds_the_global_optimum_not_the_greedy_one() {
+        // Greedy (face 0 first) takes c1 at 0.866 and leaves face 1 unmatched
+        // (0.367 < fail). The optimum swaps: 0.663 + 0.985.
+        let angle = |degrees: f32| {
+            let radians = degrees.to_radians();
+            embedding(radians.cos(), radians.sin())
+        };
+        let canons = vec![angle(0.0), angle(78.46)];
+        let detected = vec![angle(30.0), angle(10.0)];
+        let thresholds = vec![IdentityThresholds::for_source(EmbeddingSource::ArcFaceOnnx); 2];
+        let result =
+            assign_faces_to_canons(&detected, &canons, &thresholds, AssignmentConfig::default())
+                .unwrap();
+        assert_eq!(result.matched_count, 2, "greedy would leave one face unmatched");
+        assert_eq!(result.faces[0].character_index, Some(1));
+        assert_eq!(result.faces[1].character_index, Some(0));
+    }
+
+    #[test]
+    fn angle_offsets_restore_the_frontal_scale() {
+        let mut offsets = BTreeMap::new();
+        offsets.insert(FaceViewAngle::Profile, -0.08);
+        assert!((normalize_angle_score(0.82, FaceViewAngle::Profile, &offsets) - 0.90).abs() < 1e-6);
+        assert!((normalize_angle_score(0.82, FaceViewAngle::Frontal, &offsets) - 0.82).abs() < 1e-6);
+        // No calibration entry → no invented correction.
+        assert!((normalize_angle_score(0.82, FaceViewAngle::Unknown, &offsets) - 0.82).abs() < 1e-6);
+    }
+
+    #[test]
+    fn calibration_flag_matches_the_disabled_fail_gate() {
+        // Perfectly separated classes: the pass boundary lands just above the
+        // negative maximum, the fail boundary would land above it, and the
+        // inverted grey zone must disable auto-fail *and* say so.
+        // Distinct values (no repeats): the counts below are per-sample.
+        let positives: Vec<_> = (0..400)
+            .map(|i| sample(0.900 + i as f32 * 0.000_01, EmbeddingSource::ArcFaceOnnx))
+            .collect();
+        let negatives: Vec<_> = (0..400)
+            .map(|i| sample(0.100 + i as f32 * 0.000_01, EmbeddingSource::ArcFaceOnnx))
+            .collect();
+        let thresholds =
+            calibrate_thresholds(&positives, &negatives, CalibrationConfig::default()).unwrap();
+        assert!(thresholds.auto_pass_enabled);
+        assert!(!thresholds.auto_fail_enabled);
+        assert_eq!(thresholds.fail.0, -1.0);
+        assert!(thresholds.fail.0 <= thresholds.pass.0);
+        let diagnostics = thresholds.calibration.unwrap();
+        assert!(!diagnostics.auto_fail_enabled);
     }
 }

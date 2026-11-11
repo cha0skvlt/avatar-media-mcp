@@ -1,12 +1,44 @@
-//! Avatar identity profile (ARCHITECTURE.md 4.1–4.2).
+//! Avatar identity profile.
 //!
-//! avatar.json: identity (visual traits only), persona, voice, prompt_blocks,
-//! refs. consent.json is a hard gate (4.4). identity/ holds the mathematical
-//! identity lock (4.5): ArcFace embeddings, FLAME face fit, SMPL body fit.
+//! `avatars/<slug>/` holds `avatar.json` (identity, persona, voice,
+//! prompt_blocks, refs), `consent.json` (hard gate), `identity_model.json`
+//! (ArcFace embeddings + per-avatar threshold) and `refs/NN.jpg` (the canon).
+//! Every path inside `avatar.json` is relative to the avatar directory;
+//! `AvatarStore` enforces that on write and resolves it on read.
 
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA_VERSION: u32 = 1;
+
+impl Identity {
+    /// Number of filled leaf fields (hair counts as three).
+    pub fn filled_fields(&self) -> usize {
+        [
+            self.apparent_age_range.as_str(),
+            self.gender_presentation.as_str(),
+            self.face_shape.as_str(),
+            self.skin_tone.as_str(),
+            self.eyes.as_str(),
+            self.brows.as_str(),
+            self.nose.as_str(),
+            self.lips.as_str(),
+            self.hair.color.as_str(),
+            self.hair.length.as_str(),
+            self.hair.style.as_str(),
+            self.facial_hair.as_deref().unwrap_or(""),
+            self.build.as_str(),
+        ]
+        .iter()
+        .filter(|value| !value.trim().is_empty())
+        .count()
+            + usize::from(!self.distinguishing_marks.is_empty())
+    }
+
+    /// An identity with no filled field is not a description.
+    pub fn is_empty(&self) -> bool {
+        self.filled_fields() == 0
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Avatar {
@@ -93,7 +125,7 @@ pub struct Refs {
     pub set: Vec<String>,
 }
 
-/// Consent gate (ARCHITECTURE.md 4.4). avatar_create refuses without it.
+/// Consent gate. avatar_create refuses without it.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Consent {
     pub subject: ConsentSubject,
@@ -113,7 +145,7 @@ pub enum ConsentSubject {
     Fictional,
 }
 
-/// Mathematical identity lock (ARCHITECTURE.md 4.5), stored in identity/.
+/// Mathematical identity lock, stored in identity_model.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityModel {
     /// ArcFace 512-d embeddings per reference image.

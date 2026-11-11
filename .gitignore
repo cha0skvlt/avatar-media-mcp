@@ -1,16 +1,7 @@
 /target
 .env
-*.sqlite
-*.sqlite-journal
-*.sqlite-wal
-*.sqlite-shm
-
-# avatars: personal data, never in git
 avatars/
-
-# model weights (~370 MB), re-download on new machines
 models/
-
-# test asset sets (personal photos)
-Ksenia/
-Eugene/
+.DS_Store
+*.swp
+*.tmp

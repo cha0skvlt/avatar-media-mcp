@@ -1,4 +1,4 @@
-//! Project brief and state machine (ARCHITECTURE.md 5.1, 5.3).
+//! Project brief and state machine.
 
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,7 @@ pub struct Brief {
     pub cast: Vec<String>,
     pub format: ProjectFormat,
     pub platform: String,
-    /// Default "en"; other languages are explicit (operator decision #2).
+    /// Default "en"; other languages are explicit.
     pub language: String,
     pub goal: String,
     pub budget_cap_usd: f64,

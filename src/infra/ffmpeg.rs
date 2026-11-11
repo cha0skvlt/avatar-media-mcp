@@ -1,11 +1,12 @@
-//! Typed ffmpeg operations (ARCHITECTURE.md 9.4, 10).
+//! Typed ffmpeg operations.
 //!
 //! Receipts, not raw flags: each operation is a typed call producing a
 //! deterministic command. ffmpeg/ffprobe are external binaries in PATH.
 
 use std::process::Stdio;
 
-/// Verify ffmpeg/ffprobe are available; called at server startup.
+/// Verify ffmpeg/ffprobe are available. Not called at server startup: the
+/// server must boot for faceswap/avatar_create on machines without ffmpeg.
 pub async fn check_available() -> anyhow::Result<()> {
     for bin in ["ffmpeg", "ffprobe"] {
         let ok = tokio::process::Command::new(bin)
@@ -24,7 +25,7 @@ pub async fn check_available() -> anyhow::Result<()> {
 /// Probe media: duration, resolution, fps.
 pub async fn probe(_path: &std::path::Path) -> anyhow::Result<ProbeResult> {
     // M2: ffprobe -json.
-    unimplemented!("M2")
+    anyhow::bail!("ffmpeg::probe lands with M2 (ffprobe -print_format json)")
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -48,12 +49,11 @@ pub enum FfmpegOp {
 }
 
 impl FfmpegOp {
-    /// Build the deterministic argv for this operation.
-    pub fn argv(&self) -> Vec<String> {
+    /// Build the deterministic argv for this operation. Returns an error until
+    /// the M2 builders exist: a bare `["ffmpeg"]` would run an interactive
+    /// ffmpeg and look like a successful command.
+    pub fn argv(&self) -> anyhow::Result<Vec<String>> {
         // M2: per-variant argv builders.
-        match self {
-            Self::Trim { .. } => vec!["ffmpeg".into()],
-            _ => vec!["ffmpeg".into()],
-        }
+        anyhow::bail!("FfmpegOp::argv lands with M2 (per-variant argv builders)")
     }
 }

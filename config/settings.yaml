@@ -1,0 +1,6 @@
+# Runtime knobs. One source of truth: this file, then env.
+# Overrides: CHA0S_MEDIA_DEFAULT_TIER, CHA0S_MEDIA_PROJECT_BUDGET_USD,
+# CHA0S_MEDIA_MAX_CONCURRENCY.
+default_tier: standard
+project_budget_usd: 25.0
+max_concurrency: 4

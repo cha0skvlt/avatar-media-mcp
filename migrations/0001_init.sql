@@ -1,4 +1,4 @@
--- avatar-media-mcp schema. One contour with the agent (ARCHITECTURE.md 9.5):
+-- avatar-media-mcp schema. One contour with the agent:
 -- the agent reads these tables through kb/database directly.
 
 CREATE TABLE IF NOT EXISTS projects (

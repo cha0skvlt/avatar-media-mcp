@@ -1,4 +1,4 @@
-//! Domain models: Avatar, Project, Script, Shot, Job, Cost (ARCHITECTURE.md 4–5, 8).
+//! Domain models: Avatar, Project, Script, Shot, Job, Cost.
 //!
 //! Typed with serde + schemars: JSON schemas for MCP tool arguments are
 //! derived from these types.

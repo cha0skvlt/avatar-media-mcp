@@ -1,4 +1,4 @@
-//! Series layer for format=film (ARCHITECTURE.md 5.1).
+//! Series layer for format=film.
 //!
 //! series.json over projects: shared cast, style rules, series-wide budget.
 //! Each episode is a normal project referencing the series.

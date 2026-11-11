@@ -1,4 +1,4 @@
-//! Two-stage QC orchestration (ARCHITECTURE.md 4.5, 7, 11).
+//! Two-stage QC orchestration.
 //!
 //! The pure helpers below implement QC-1/QC-2 decisions and are independent of
 //! database, frame extraction, and model-provider I/O. Existing async entry
@@ -20,6 +20,17 @@ use crate::identity::scoring::{
     assign_faces_to_canons, stage1_embedding,
 };
 use crate::identity::scoring::FaceViewAngle;
+
+/// QC thresholds for one avatar: the stored per-avatar pass threshold applied
+/// to the encoder space. This is the only consumer of
+/// `IdentityModel.identity_threshold` — without it the field is written and
+/// never read, and every avatar is judged by the global default.
+pub fn thresholds_for_avatar(
+    model: &crate::domain::avatar::IdentityModel,
+    source: crate::identity::embeddings::EmbeddingSource,
+) -> Result<IdentityThresholds> {
+    IdentityThresholds::with_avatar_pass_threshold(source, model.identity_threshold)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

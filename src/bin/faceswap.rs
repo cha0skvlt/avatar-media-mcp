@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
     // 3. Swap.
     let mut swap = SwapEngine::load(std::path::Path::new("models/faceswap"))?;
     println!("gpen available: {}", swap.gpen_available());
-    let target = image::open(tgt_path)
+    let target = avatar_media_mcp::infra::image_io::open_limited(tgt_path)
         .with_context(|| format!("open {}", tgt_path.display()))?
         .to_rgb8();
     let t2 = Instant::now();

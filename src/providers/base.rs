@@ -1,4 +1,4 @@
-//! Provider traits (ARCHITECTURE.md 9.4).
+//! Provider traits.
 //!
 //! Every trait is mockable in tests; implementations are thin reqwest clients.
 

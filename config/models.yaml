@@ -1,14 +1,11 @@
 # Registry of models: role → tier → provider/model/params/price.
-# Prices are hypotheses until M0 spike fills this file with real numbers
-# (ARCHITECTURE.md section 12). providers_check verifies model_id liveness daily.
+# Prices are hypotheses until the M0 spike fills this file with real numbers.
 #
-# Constraint: no forced output watermarking (visible or invisible). Models with
-# mandatory output marking do not enter this registry (operator decision #9).
+# Constraint: no forced output watermarking (visible or invisible).
 
+# Budget and concurrency are runtime settings — config/settings.yaml, not here.
 defaults:
   tier: standard
-  budget_cap_usd: 25
-  max_concurrency: 4
 
 roles:
   avatar_canon:
@@ -104,9 +101,10 @@ roles:
 
   word_timing:
     # Alignment from TTS response; local whisper fallback ($0).
-    draft: { provider: tts_response }
-    standard: { provider: tts_response }
-    premium: { provider: local_whisper }
+    # `model_id` is required by ModelEntry: the TTS response is the source.
+    draft: { provider: tts_response, model_id: tts_response }
+    standard: { provider: tts_response, model_id: tts_response }
+    premium: { provider: local_whisper, model_id: whisper-small }
 
   qc_judge:
     # Vision judge for borderline identity scores and artifacts.

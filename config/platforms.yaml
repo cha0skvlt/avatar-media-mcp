@@ -1,5 +1,4 @@
 # Platform profiles: deterministic ffmpeg assembly parameters.
-# See ARCHITECTURE.md section 10.
 
 platforms:
   youtube_shorts:
@@ -31,7 +30,7 @@ platforms:
     subtitle_safe_area: { top: 0.12, bottom: 0.18 }
     subtitle_font_size: large
 
-# Export rules (ARCHITECTURE.md section 10):
+# Export rules:
 # - ai_disclosure: true by default in metadata.json; removal is an explicit decision.
 # - No auto-publish in any version; operator uploads manually.
 export:

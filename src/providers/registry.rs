@@ -35,8 +35,6 @@ impl ProviderRegistry {
     /// Construct a concrete provider by name. M1+: fal, elevenlabs, fish,
     /// byteplus constructors; unknown provider is a config error.
     pub fn provider(&self, name: &str) -> anyhow::Result<Arc<dyn std::any::Any>> {
-        match name {
-            _ => anyhow::bail!("unknown provider: {name}"),
-        }
+        anyhow::bail!("provider `{name}` has no constructor yet (M1/M2)")
     }
 }

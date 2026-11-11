@@ -11,7 +11,7 @@ fn main() -> anyhow::Result<()> {
     let emb = src_faces[0].vector.clone();
     let dets = engine.detect_faces(Path::new(&args[2]))?;
     let det = &dets[0];
-    let target = image::open(Path::new(&args[2]))?.to_rgb8();
+    let target = avatar_media_mcp::infra::image_io::open_rgb8(Path::new(&args[2]))?;
     let kps: Vec<[f32;2]> = det.kps.to_vec();
     let m = umeyama_similarity(&kps, &SWAP_TEMPLATE)?;
     let inv = m.invert()?;

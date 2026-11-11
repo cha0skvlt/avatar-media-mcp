@@ -1,74 +1,109 @@
 # avatar-media-mcp
 
-MCP server for generative media with avatars. Rust + rmcp (official MCP SDK).
-Architecture: [ARCHITECTURE.md](/ARCHITECTURE.md). Code follows the work plan, section 13 (M0–M7).
+Rust MCP server for generative media with avatars. The agent is the brain
+(script, dialogue, approvals); this server executes everything that costs money
+or touches files.
+
+**Live today:** `faceswap` (FS1) and `avatar_create` (M1), plus `providers_check`
+(preflight). The remaining 14 tools answer with an explicit "planned for M<n>"
+error.
 
 ## Build
 
-```sh
-cargo build --release          # single static binary target/release/avatar-media-mcp
-cargo test                     # providers are mocked; ffmpeg tests on synthetic clips
+```bash
+cargo build --release --features local-identity
 ```
 
-Requirements: Rust 1.97+ (edition 2024), `ffmpeg`/`ffprobe` in PATH.
+`local-identity` enables the ONNX path (`ort`, load-dynamic) that `faceswap`
+and `avatar_create` load their models through.
 
-Identity inference (optional feature, local, no network):
+## Run
 
-```sh
-cargo build --features local-identity --bin identity_test
-cargo build --features local-identity --bin avatar_build
-# models: models/insightface/buffalo_l/ + models/ort/lib/ (not in git, see ARCHITECTURE §15)
+The server resolves `models/`, `avatars/` and `config/` **relative to the
+process cwd**: launch it from this directory.
+
+```bash
 ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
-  ./target/debug/avatar_build --name <slug> --photos <dir> --consent self
+  ./target/release/avatar-media-mcp
 ```
 
-Face swap (FS1), two entry points over the same `SwapEngine`:
-
-```sh
-cargo build --features local-identity --bins
-# CLI:
-ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
-  ./target/debug/faceswap <source_face_img> <target_img> [out.png]
-# MCP server (tool `faceswap`: source_path, target_path, out_path):
-cd avatar-media-mcp && ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
-  ./target/debug/avatar-media-mcp
-```
+Logs go to stderr; `RUST_LOG=debug` raises the level.
 
 ## Wiring into CHA0S AOE
 
+`~/.config/cha0s/settings.json`:
+
 ```jsonc
-// ~/.config/cha0s/settings.json
 "context_servers": {
   "avatar-media": {
     "command": "/abs/path/to/avatar-media-mcp",
     "args": [],
-    "env": { "FAL_KEY": "...", "ELEVENLABS_API_KEY": "...", "DATABASE_URL": "..." }
+    "env": {
+      "FAL_KEY": "...",
+      "ELEVENLABS_API_KEY": "...",
+      "DATABASE_URL": "postgres://..."
+    }
   }
 }
 ```
 
-## Structure
+Keys are read from the **process env** (`context_servers.env`); `.env.example`
+lists the names.
+
+## Layout
 
 ```
-src/
-├── main.rs        # rmcp stdio server (M1): tool `faceswap` live; the rest M1–M7 stubs
-├── bin/           # faceswap (FS1 CLI), identity_test, avatar_build, faceswap_diag
-├── config/        # models.yaml, platforms.yaml, .env
-├── domain/        # Avatar, Project, Script, Shot, Job, Cost (serde + schemars)
-├── identity/      # ArcFace embeddings, FLAME/SMPL fits, scoring (ARCHITECTURE §4)
-├── providers/     # traits + fal/byteplus/elevenlabs/fish REST clients, role+tier registry
-├── pipeline/      # faceswap (FS1, ✅), avatar_build, audio, keyframes, shots, qc, assemble
-├── infra/         # Postgres store (sqlx), file cache, cost ledger, ffmpeg ops
-└── series.rs      # serialization for the film format
-config/            # models.yaml (model registry), platforms.yaml (platform profiles)
-tests/             # integration tests
+config/            models.yaml (registry), platforms.yaml (export rules), settings.yaml (runtime knobs)
+migrations/        0001_init.sql (schema), 0002_integrity.sql (unique request_id, FKs, cascade)
+models/            insightface/buffalo_l, faceswap, ort/lib
+avatars/           <slug>/{avatar.json, consent.json, identity_model.json, refs/NN.jpg}
+src/config/        models, platforms, settings (figment loader)
+src/domain/        avatar, project, script, job, cost, series — types only
+src/identity/      scoring (decisions), arcface (SCRFD + ArcFace), clusters, textpass, embeddings, threed
+src/providers/     base traits; fal/elevenlabs/fish/byteplus structs (M1/M2)
+src/pipeline/      faceswap, avatar_build (normalize + quality), qc (pure gates); audio/keyframes/shots/assemble at M2–M6
+src/infra/         avatar_store, image_io (bounded decode), paths (write confinement), cache, ffmpeg, ledger, store
+src/tools/         avatar_create, health (preflight)
+src/bin/           avatar_build, faceswap, faceswap_diag, identity_test
+tests/             integration, smoke, db (needs DATABASE_URL), e2e_models (ignored, needs weights)
 ```
 
-## Keys
+## CLI entry points
 
-See `.env.example`. MVP minimum: `FAL_KEY`, `ELEVENLABS_API_KEY`, `DATABASE_URL`.
-`.env` is gitignored; the server never writes keys to logs or the database.
+```bash
+# Avatar from a folder of photos (writes through the same AvatarStore as the tool)
+ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
+  cargo run --features local-identity --bin avatar_build -- \
+  --name <slug> --photos <dir> --consent self
 
-## What is not in git
+# Face swap
+ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
+  cargo run --features local-identity --bin faceswap -- <face> <target> <out.png>
 
-`avatars/` (personal data), `models/` (weights, ~370 MB), test asset sets (`Ksenia/`, `Eugene/`).
+# Embedding sanity check
+ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
+  cargo run --features local-identity --bin identity_test -- <img1> [<img2>]
+```
+
+## Tests
+
+```bash
+cargo test --features local-identity            # 111 tests, hermetic
+DATABASE_URL=postgres://localhost/avatar_media_qa \
+  cargo test --features local-identity --test db
+AVATAR_E2E_PHOTOS=/path/to/photos ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
+  cargo test --features local-identity --test e2e_models -- --ignored --nocapture
+```
+
+The `db` test skips itself when `DATABASE_URL` is unset. The `e2e_models` test is
+`#[ignore]`d: it runs the full three-call `avatar_create` flow on real photos.
+
+## Requirements
+
+- `ffmpeg` + `ffprobe` in PATH — used by assembly (M2).
+- `ORT_DYLIB_PATH` — required by `faceswap`, `avatar_create` and the CLIs.
+- `models/` (~370 MB) — download from HuggingFace `ApacheOne/insightface`
+  (buffalo_l) plus the faceswap weights.
+- Postgres with pgvector — only for stateful tools (M2). `CREATE EXTENSION vector`
+  in `0001_init.sql` needs a superuser; on a managed instance create the
+  extension first.

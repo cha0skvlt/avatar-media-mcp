@@ -1,5 +1,5 @@
-//! Integration tests. Providers are mocked (wiremock); ffmpeg tests run on
-//! synthetic clips (ARCHITECTURE.md 9.4).
+//! Integration tests over the public library surface. No network, no models,
+//! no ffmpeg: every case is deterministic and runs on any machine.
 
 mod cache_key {
     #[test]

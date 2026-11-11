@@ -7,3 +7,4 @@ pub mod providers;
 pub mod pipeline;
 pub mod infra;
 pub mod series;
+pub mod tools;

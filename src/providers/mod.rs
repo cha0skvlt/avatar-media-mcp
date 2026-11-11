@@ -1,8 +1,7 @@
-//! Provider abstraction (ARCHITECTURE.md 6.2, 9.1).
+//! Provider abstraction.
 //!
-//! Providers are behind traits; models live in config/models.yaml. All REST
-//! via reqwest — no vendor SDKs. Google is excluded from the stack
-//! (operator decision #9): strict input moderation and SynthID watermarking.
+//! Providers are behind traits; models live in `config/models.yaml`. All REST
+//! via reqwest — no vendor SDKs.
 
 pub mod base;
 pub mod registry;

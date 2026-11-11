@@ -1,4 +1,4 @@
-//! Fast face swap (INTEGRATION-MRB.md §2.1, milestone FS1).
+//! Fast face swap (milestone FS1).
 //!
 //! Port of the magic-red-bikini `swapper.py` methodology to pure Rust `ort`,
 //! no Python, no OpenCV:
@@ -23,7 +23,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use ndarray::Array4;
 
-use crate::identity::arcface::{shared_ort_environment, FaceEngine};
+use crate::identity::arcface::shared_ort_environment;
 
 const LM_SIZE: u32 = 192;
 const SWAP_SIZE: usize = 128;
@@ -296,7 +296,7 @@ pub fn reinhard_color_match(crop: &mut image::RgbImage, reference: &image::RgbIm
 
 fn odd(mut n: usize, minimum: usize) -> usize {
     n = n.max(minimum);
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         n += 1;
     }
     n
@@ -471,8 +471,12 @@ pub fn face_contour_mask(w: usize, h: usize, lmk: &[[f32; 2]]) -> Vec<f32> {
     if w == 0 || h == 0 {
         return mask;
     }
+    // Unusable landmarks return an empty mask, not a fallback oval: this
+    // function works in full-frame coordinates, while `ellipse_fallback_mask`
+    // is anchored in 128-crop space and would paste a tiny oval at the top
+    // centre of the frame. The caller substitutes a bbox-anchored ellipse.
     if lmk.len() < 33 || !lmk.iter().flatten().all(|v| v.is_finite()) {
-        return ellipse_fallback_mask(w, h, SWAP_SIZE as f32);
+        return mask;
     }
     let contour = &lmk[..33];
     let cx = contour.iter().map(|p| p[0]).sum::<f32>() / contour.len() as f32;
@@ -480,7 +484,7 @@ pub fn face_contour_mask(w: usize, h: usize, lmk: &[[f32; 2]]) -> Vec<f32> {
     let face_h = contour.iter().map(|p| p[1]).fold(f32::MIN, f32::max)
         - contour.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
     if !face_h.is_finite() || face_h < 1.0 {
-        return ellipse_fallback_mask(w, h, SWAP_SIZE as f32);
+        return mask;
     }
     let mut pts: Vec<(f32, f32)> = contour
         .iter()
@@ -686,7 +690,7 @@ impl SwapEngine {
         let gpen_path = models_dir.join("gpen_bfr_512.onnx");
         for p in [&lmk_path, &swap_path, &emap_path] {
             if !p.exists() {
-                bail!("faceswap model missing: {} (see INTEGRATION-MRB.md §2)", p.display());
+                bail!("faceswap model missing: {}", p.display());
             }
         }
         // FaceEngine and SwapEngine share one process-wide ORT environment;
@@ -967,7 +971,7 @@ impl SwapEngine {
             let scale = GPEN_SIZE as f64 / SWAP_SIZE as f64;
             (blended, m.scaled(scale))
         } else {
-            (swapped.clone(), m)
+            (swapped, m)
         };
 
         // Mask: 106-landmark contour + open-mouth hole; ellipse fallback.
@@ -984,11 +988,19 @@ impl SwapEngine {
             {
                 let contour = face_contour_mask(w, h, &l);
                 let keep = mouth_keep_mask(w, h, &l);
-                contour
+                let mask: Vec<f32> = contour
                     .into_iter()
                     .zip(keep)
                     .map(|(c, k)| (c * (1.0 - k)).clamp(0.0, 1.0))
-                    .collect::<Vec<f32>>()
+                    .collect();
+                // Degenerate contour (collapsed landmarks) yields an empty
+                // mask; fall back to the face-local ellipse instead of
+                // silently pasting nothing.
+                if mask.iter().sum::<f32>() < 1.0 {
+                    ellipse_face_fallback_mask(w, h, face_bbox)
+                } else {
+                    mask
+                }
             }
             _ => ellipse_face_fallback_mask(w, h, face_bbox),
         };
@@ -1005,6 +1017,9 @@ impl SwapEngine {
 }
 
 #[cfg(test)]
+// Synthetic 106-point fixtures are written by landmark id (`lmk[i] = ...`),
+// which is the readable form here; the index is the landmark, not a position.
+#[allow(clippy::needless_range_loop)]
 mod tests {
     use super::*;
 
@@ -1263,5 +1278,19 @@ mod tests {
         // dst(x) = src(x - 2): sampling matrix maps dst→src with tx = -2.
         let out = warp_sample(&img, 8, 8, &affine(1.0, 0.0, -2.0, 0.0, 1.0, 0.0));
         assert_eq!(out.get_pixel(5, 0), img.get_pixel(3, 0));
+    }
+
+    #[test]
+    fn contour_mask_is_empty_when_landmarks_are_unusable() {
+        // Full-frame coordinates: a 128-crop-space ellipse here would paste a
+        // tiny oval at the top centre of the frame. The caller substitutes a
+        // bbox-anchored ellipse instead.
+        assert_eq!(face_contour_mask(64, 64, &[]).iter().sum::<f32>(), 0.0);
+        let mut lmk = vec![[0.0f32; 2]; 106];
+        lmk[3][0] = f32::NAN;
+        assert_eq!(face_contour_mask(64, 64, &lmk).iter().sum::<f32>(), 0.0);
+        // Collapsed contour (zero height) is equally unusable.
+        let flat = vec![[10.0f32, 10.0]; 106];
+        assert_eq!(face_contour_mask(64, 64, &flat).iter().sum::<f32>(), 0.0);
     }
 }

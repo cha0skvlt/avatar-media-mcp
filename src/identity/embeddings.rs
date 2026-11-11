@@ -1,4 +1,4 @@
-//! Embedding-space contracts and cosine metrics (ARCHITECTURE.md 4.5).
+//! Embedding-space contracts and cosine metrics.
 //!
 //! An embedding is meaningful only inside the space produced by its encoder.
 //! ArcFace/ONNX and the fal vision encoder therefore carry distinct enum tags;
@@ -119,15 +119,36 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     cosine_similarity_checked(a, b).map(CosineScore::get).unwrap_or(0.0)
 }
 
-/// Legacy inference boundary retained for API compatibility. The source
-/// archive does not include either the ONNX runtime adapter or fal provider
-/// implementation; fail explicitly instead of panicking with `unimplemented!`.
+/// Local ONNX adapter (M1): batch-embed a set of reference photos with the
+/// ArcFace engine. Returns path → 512-d vector for the MAIN face of each
+/// image (largest first, exactly what `FaceEngine::embed_image` yields).
+/// Images without a detectable face are reported in `skipped`, not errors.
 pub async fn compute_embeddings(
-    _images: &[PathBuf],
-) -> Result<BTreeMap<String, Vec<f32>>> {
-    bail!(
-        "embedding inference adapter is not part of the supplied source set; provide the licensed local ONNX or provider adapter"
-    )
+    images: &[PathBuf],
+) -> Result<(BTreeMap<String, Vec<f32>>, Vec<String>)> {
+    let mut engine = crate::identity::arcface::FaceEngine::load(std::path::Path::new(
+        "models/insightface/buffalo_l",
+    ))?;
+    let mut vectors = BTreeMap::new();
+    let mut skipped = Vec::new();
+    for path in images {
+        let key = path.display().to_string();
+        // A missing/unreadable file is an operator error, not "no face": it
+        // must not be silently folded into the skipped list.
+        anyhow::ensure!(path.is_file(), "reference photo not found: {key}");
+        match engine.embed_image(path) {
+            Ok(faces) if !faces.is_empty() => {
+                vectors.insert(key, faces[0].vector.clone());
+            }
+            Ok(_) | Err(_) => skipped.push(key),
+        }
+    }
+    anyhow::ensure!(
+        !vectors.is_empty(),
+        "no face found in any of {} images",
+        images.len()
+    );
+    Ok((vectors, skipped))
 }
 
 #[cfg(test)]
