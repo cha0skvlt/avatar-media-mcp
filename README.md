@@ -1,7 +1,7 @@
 # avatar-media-mcp
 
 MCP server for generative media with avatars. Rust + rmcp (official MCP SDK).
-Architecture: [../ARCHITECTURE.md](../ARCHITECTURE.md). Code follows the work plan, section 13 (M0–M7).
+Architecture: [ARCHITECTURE.md](/ARCHITECTURE.md). Code follows the work plan, section 13 (M0–M7).
 
 ## Build
 
