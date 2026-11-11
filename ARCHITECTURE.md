@@ -131,9 +131,20 @@ Run: `ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib ./target/debug/i
 
 `fit_face()` / `fit_body()` return an explicit error. The FLAME fit is the second fusion channel; SMPL is the figure check for wide shots.
 
-### 4.5 Text channel (prototype, outside the tree)
+### 4.5 Text channel — ArcFace-first identity pipeline ⬜ (not implemented)
 
-Dense appearance description (33 fields) via a local Ollama vision model (`qwen3.6-a3b:vision-q8`) — manually verified: description → reverse verification match 1.0. Role: filling `avatar.json.identity`, prompt blocks, judge checklist. **Does not replace** the numeric lock — complements it. Wiring into the server (`identity/textpass.rs`) — not started.
+**Design decision (2026-11-11), not yet in code.** The numeric lock is built first and governs the text; the text never precedes the numbers.
+
+Four phases, in fixed order:
+
+1. **Numeric lock (mandatory, first).** `photos → normalize → FaceEngine → 512-d vectors → dedupe → IdentityModel`. Already working (§4.2, first avatars built). Phase 1 additionally produces the grounding artifacts for the text: **reference clusters** (cosine grouping, threshold ~0.85 — one cluster = one appearance state; Eugene's set yields "shaved" vs "short mop" automatically), **cluster centroids**, **inter-cluster scores** (the avatar's real identity range), and the **per-avatar threshold**.
+2. **Grounded text description.** A vision channel generates the 33-field `identity` description, but not freely: its input is (a) 1–2 representative images per cluster and (b) the numeric summary (cluster count, sizes, inter/intra-cluster cosines, threshold). The description must cover every cluster and name what distinguishes them. Every claim is verifiable; unstable traits (visible in one cluster only, except explicitly variable ones like hair) are barred from `do_not_change`.
+3. **Two transports, one contract.** The vision channel sits behind an interface with two implementations: **local** (Ollama Qwen-VL, $0, deterministic, default when available) and **cloud** (vision via fal, or the multimodal IDE agent — verified working in this environment). Config: `identity.text_channel: local | cloud | agent`; the server tries in order. Both channels return the same 33-field schema and receive the same numeric summaries — switching channels never changes the `avatar.json` format, only the prose quality.
+4. **Closed-loop validation.** Reverse verification (the same channel checks description vs cluster representatives → match score; below threshold → regenerate ≤2, then flag the operator). `do_not_change` consistency check (each entry must derive from cluster-stable traits). Prompt blocks are assembled only from validated text.
+
+Practical consequences: no text without numbers (phases 2–4 cannot start before phase 1); clustering is a free by-product of the lock that turns "22 heterogeneous photos" into structured appearance states; an operator with neither Ollama nor keys still gets a valid avatar (numeric lock + empty text — the canon then relies on references alone).
+
+Status: **prototype only** — the Ollama path was manually verified (33-field description, reverse verification match 1.0), the cloud path was manually exercised by the multimodal agent filling Eugene's profile. Nothing is wired into the server: no `identity/textpass.rs`, no clustering code, no channel interface, no config key. Target milestone: M1 (alongside the MCP skeleton).
 
 ---
 
@@ -228,7 +239,7 @@ The AOE agent reads these tables directly through `kb`/`database` — `cost_ledg
 | Milestone | Contents | State |
 | --- | --- | --- |
 | M0 | fal+ElevenLabs keys, blind bake-off 3 TALK / 3 BROLL / 2 image / 2 TTS, watermark and moderation tests → `models.yaml` + `m0_results` | ⬜ no keys yet |
-| M1 | MCP skeleton (main.rs), avatar_create→canon→voice, `compute_embeddings` adapter | ⬜ (ArcFace inference already done — §4.2) |
+| M1 | MCP skeleton (main.rs), avatar_create→canon→voice, `compute_embeddings` adapter, **ArcFace-first text pipeline (§4.5): clustering, vision-channel interface, reverse verification** | ⬜ (ArcFace inference already done — §4.2) |
 | M2 | audio + assemble (animatic <$0.5) + ledger in Postgres | ⬜ |
 | M3 | keyframes + TALK, threshold calibration on a real face, two-character scene | ⬜ |
 | M4 | BROLL + avatar in action | ⬜ |
@@ -252,6 +263,7 @@ The AOE agent reads these tables directly through `kb`/`database` — `cost_ledg
 10. **State is Postgres** (one contour with the agent via kb/database), no SQLite; pgvector for identity scores; DSN is mandatory.
 11. **ArcFace uses open buffalo_l weights** (InsightFace); the licensing question was waived by the operator; per-character fine-tuning comes later, the hook is in place (`IdentityModel`, per-avatar thresholds).
 12. **The project is monolingual** — no Python; Python prototypes are forbidden.
+13. **ArcFace-first identity pipeline** (design fixed 2026-11-11, not implemented — §4.5): the numeric lock is built first and grounds the text; the text description is generated by a vision channel (local Ollama default, cloud/agent fallback) over cluster artifacts produced by the lock, validated by reverse verification, and never precedes the numbers.
 
 ---
 
