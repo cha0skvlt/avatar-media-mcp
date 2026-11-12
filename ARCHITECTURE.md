@@ -82,7 +82,7 @@ avatar-media-mcp/                # the crate — 9092 lines of Rust
     └── e2e_models.rs            #  94  1 test — #[ignore], needs weights + photos
 ```
 
-Counters: `cargo test --features local-identity` → **108/108 green** (84 lib unit + 5 integration + 18 smoke + 1 db), plus **1 ignored** (`e2e_models`). `cargo check --features local-identity --all-targets` → **0 warnings**. `cargo clippy --all-targets` → **0 warnings**.
+Counters: `cargo test --features local-identity` → **113/113 green** (89 lib unit + 5 integration + 18 smoke + 1 db), plus **1 ignored** (`e2e_models`). `cargo check --features local-identity --all-targets` → **0 warnings**. `cargo clippy --all-targets` → **0 warnings**.
 
 Runtime path rule: the server resolves `models/insightface/buffalo_l`, `models/faceswap` and writes `avatars/<slug>/` **relative to the process cwd**. It must be launched with `cwd = avatar-media-mcp`.
 
@@ -266,7 +266,7 @@ The AOE agent reads these tables directly through `kb`/`database`; the `cost_led
 | Tool | State | Notes |
 | --- | --- | --- |
 | `faceswap` | ✅ | `source_path`, `target_path`, `out_path` (confined to the workspace); swaps exactly one face (best-scoring detection); 120 s timeout |
-| `avatar_create` | ✅ | `photos` (1–30), `slug`, `text_channel`, `identity_json`, `verification_json`, `force`; three-call flow; 900 s timeout |
+| `avatar_create` | ✅ | `photos` (1–30), `slug`, `text_channel`, `identity_json`, `verification_json`, `force`, `accept_flagged`; three-call flow; 900 s timeout |
 | `providers_check` | ✅ | preflight: config files, key presence, ORT dylib, model dirs, ffmpeg, avatars root, DATABASE_URL — reads config and env only |
 | `avatar_list`, `avatar_status`, `avatar_approve_canon` | ⬜ M1 | |
 | `project_create`, `script_submit` | ⬜ M1 | |
@@ -281,20 +281,22 @@ Stubs answer with `invalid_params` and the milestone they belong to — the cont
 
 **`avatar_create` flow** (`tools/avatar.rs`): slug validation → approved-canon guard (`force`) → `normalize_photo` into a **staging** `refs/NN.jpg` → per-photo quality gate → `compute_embeddings` → near-duplicate removal (cosine > 0.9999) → `auto_threshold` → `cluster_references` (medoid-ordered) → `NumericSummary` → channel loop → **verification** → `build_prompt_blocks` → `Staging::commit` (swap into place) → report (clusters, representatives, threshold, skipped/duplicate images, channel used, verdict, flag, warnings). A failed rebuild leaves the live avatar untouched. Blocking ONNX work runs inside `spawn_blocking` under a timeout; the async channel calls are driven by `futures::executor::block_on`.
 
-**Verification is a second round-trip.** With `identity_json` but no `verification_json`, `avatar_create` returns the verification prompt (description + the same representatives) and writes nothing. The agent answers `{"match_score": 0..1, "mismatches": [...]}`; `parse_agent_verification` rejects anything outside `[0, 1]`; `verification_flagged = match_score < 0.8`. `AgentChannel::verify` fails with that round-trip request.
+**Every step of the flow answers with a normal tool result.** The round-trips and the verification gate are `AgentStep { status, message, next }` values (`tools/avatar.rs`) carried through `anyhow::Error` and downcast in `main.rs` into a successful result; genuine failures (bad arguments after validation, timeouts, engine errors) are returned as `isError` results via `tool_failure`, not JSON-RPC errors.
+
+**Verification is a second round-trip.** With `identity_json` but no `verification_json`, `avatar_create` answers `needs_identity`/`needs_verification` (description + the same representatives) and writes nothing. The agent answers `{"match_score": 0..1, "mismatches": [...]}`; `parse_agent_verification` rejects anything outside `[0, 1]`. `gate_verification` refuses a score below 0.8 with status `verification_failed` and writes nothing; only the operator override `accept_flagged=true` writes it, and then `verification_flagged` is true and a warning is recorded. The score is the agent's own claim: the gate enforces the protocol, not the claim. `AgentChannel::verify` fails with that round-trip request.
 
 ---
 
-## 12. Tests — ✅ 108/108 (+1 ignored)
+## 12. Tests — ✅ 113/113 (+1 ignored)
 
-`cargo test --features local-identity` → 84 lib unit + 5 integration + 18 smoke + 1 db, all green; `e2e_models` is `#[ignore]`d. The default suite is hermetic: pure functions and temp directories. The `db` test skips itself when `DATABASE_URL` is unset.
+`cargo test --features local-identity` → 89 lib unit + 5 integration + 18 smoke + 1 db, all green; `e2e_models` is `#[ignore]`d. The default suite is hermetic: pure functions and temp directories. The `db` test skips itself when `DATABASE_URL` is unset.
 
 - **`pipeline/faceswap.rs`** (18): affine invert/scale, Umeyama (similarity, identity, isotropic covariance), Reinhard (noop, mean shift), hull/fill/masks, mouth MAR and keep hole, ellipse fallback, warp identity/translation, paste mask and forward-sampler round-trip, unusable-landmark contour returns an empty mask.
 - **`identity/scoring.rs`** (13): calibration (known separability, auto-pass refusal, disabled-fail flag consistency), drift (stable / linear decline / step / outlier, angle offsets), assignment (K≠M, twin canons, swap), clip aggregation, fusion (training, channel conflict, source mismatch), per-avatar pass threshold cannot invert the gate.
 - **`identity/textpass.rs`** (7): base64 RFC 4648 vectors, wrapped-JSON parsing, `do_not_change` filtering, agent describe round-trip, agent verify refuses to verify on the agent's behalf, verification payload validation (`match_score` outside `[0,1]` rejected), prompt-block rendering (empty identity stays empty, hair dropped on multi-state).
 - **`identity/arcface.rs`** (5): affine roundtrip, solve6, bbox/SCRFD component indexing, ambiguous-shape rejection, IoU.
 - **`identity/clusters.rs`** (6): two appearance states, single state, empty input, closest-cluster assignment, invalid vectors rejected, order-independence (reversed input → same clusters).
-- **`tools/avatar.rs`** (3): slug traversal rejected, near-duplicate removal, photo count bounded.
+- **`tools/avatar.rs`** (8): slug traversal rejected, near-duplicate removal, photo count bounded; `gate_verification` passes at or above the threshold, refuses a failed verification and writes nothing, explains an empty mismatch list, the operator override writes but stays flagged, `AgentStep` survives the `anyhow` round-trip.
 - **`infra/avatar_store.rs`** (11): save/load roundtrip, absolute refs refused, missing ref refused on save, primary must be in the set, a ref that disappeared is reported on load, missing model file is an error, slug traversal refused, staging commit replaces the live avatar, dropped staging leaves it untouched, schema_version mismatch refused, slug mismatch refused.
 - **`infra/image_io.rs`** (4): oversized image refused, normal photo accepted, missing file is an error, EXIF orientation (6 and 1) baked into the pixels at decode.
 - **`infra/paths.rs`** (3): output inside the workspace allowed, outside refused, traversal refused.

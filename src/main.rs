@@ -18,7 +18,7 @@ use rmcp::{
 use avatar_media_mcp::identity::arcface::FaceEngine;
 use avatar_media_mcp::infra::paths::confine_output;
 use avatar_media_mcp::pipeline::faceswap::SwapEngine;
-use avatar_media_mcp::tools::avatar::{AvatarCreateArgs, avatar_create};
+use avatar_media_mcp::tools::avatar::{AgentStep, AvatarCreateArgs, avatar_create};
 use avatar_media_mcp::tools::health::preflight;
 
 /// A hung ONNX session must not hang the agent forever.
@@ -67,6 +67,13 @@ fn with_engines<T>(
     }
     f(engine_guard.as_mut().unwrap(), swap_guard.as_mut().unwrap())
         .map_err(|err| McpError::internal_error(err.to_string(), None))
+}
+
+/// A tool that ran and failed. MCP wants execution failures inside the tool
+/// result (`isError`), where the model sees the text; a JSON-RPC error is for
+/// protocol problems (bad arguments, unknown tool) and clients may swallow it.
+fn tool_failure(message: impl Into<String>) -> CallToolResult {
+    CallToolResult::error(vec![Content::text(message.into())])
 }
 
 fn not_yet(tool: &str, milestone: &str) -> McpError {
@@ -128,22 +135,23 @@ impl AvatarMediaServer {
                 ))
             })
         });
-        let report = tokio::time::timeout(SWAP_TIMEOUT, report)
-            .await
-            .map_err(|_| {
-                McpError::internal_error(
-                    format!("faceswap exceeded {}s", SWAP_TIMEOUT.as_secs()),
-                    None,
-                )
-            })?
-            .map_err(|e| McpError::internal_error(format!("swap task: {e}"), None))?
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let report = match tokio::time::timeout(SWAP_TIMEOUT, report).await {
+            Err(_) => {
+                return Ok(tool_failure(format!(
+                    "faceswap exceeded {}s",
+                    SWAP_TIMEOUT.as_secs()
+                )));
+            }
+            Ok(Err(join_error)) => return Ok(tool_failure(format!("swap task: {join_error}"))),
+            Ok(Ok(Err(error))) => return Ok(tool_failure(error.to_string())),
+            Ok(Ok(Ok(report))) => report,
+        };
         tracing::info!(elapsed_ms = started.elapsed().as_millis() as u64, "faceswap done");
         Ok(CallToolResult::success(vec![Content::text(report)]))
     }
 
     /// avatar_create: the M1 end-to-end path (live).
-    #[tool(description = "Create an avatar from reference photos. Three calls: (1) no identity_json → returns the cluster representatives + numeric summary; (2) identity_json → returns the verification prompt; (3) identity_json + verification_json {match_score, mismatches} → writes avatars/<slug>/{avatar.json, identity_model.json, refs/NN.jpg} atomically. Photos are normalized and quality-gated; an approved canon is never replaced without force=true.")]
+    #[tool(description = "Create an avatar from reference photos. Multi-call protocol; every step answers with JSON {status, message, next}: (1) no identity_json → status needs_identity: cluster representatives + numeric summary; (2) identity_json → status needs_verification: the verification prompt; (3) identity_json + verification_json {match_score, mismatches} → if match_score >= 0.8 writes avatars/<slug>/{avatar.json, identity_model.json, refs/NN.jpg} atomically; below 0.8 → status verification_failed and NOTHING is written: fix identity_json and verify again (only the operator may pass accept_flagged=true to write anyway). Photos are normalized and quality-gated; an approved canon is never replaced without force=true.")]
     async fn avatar_create(
         &self,
         rmcp::handler::server::tool::Parameters(args): rmcp::handler::server::tool::Parameters<
@@ -152,19 +160,36 @@ impl AvatarMediaServer {
     ) -> Result<CallToolResult, McpError> {
         let slug = args.slug.clone();
         let started = std::time::Instant::now();
-        let report = tokio::time::timeout(
+        let joined = tokio::time::timeout(
             AVATAR_TIMEOUT,
             tokio::task::spawn_blocking(move || avatar_create(&args)),
         )
-        .await
-        .map_err(|_| {
-            McpError::internal_error(
-                format!("avatar_create exceeded {}s", AVATAR_TIMEOUT.as_secs()),
-                None,
-            )
-        })?
-        .map_err(|e| McpError::internal_error(format!("avatar_create task: {e}"), None))?
-        .map_err(|e: anyhow::Error| McpError::internal_error(e.to_string(), None))?;
+        .await;
+        let outcome = match joined {
+            Err(_) => {
+                return Ok(tool_failure(format!(
+                    "avatar_create exceeded {}s",
+                    AVATAR_TIMEOUT.as_secs()
+                )));
+            }
+            Ok(Err(join_error)) => {
+                return Ok(tool_failure(format!("avatar_create task: {join_error}")));
+            }
+            Ok(Ok(outcome)) => outcome,
+        };
+        let report = match outcome {
+            Ok(report) => report,
+            Err(error) => {
+                // The round-trip steps and the verification gate are part of the
+                // protocol: hand the agent a normal result with the next call.
+                if let Some(step) = error.downcast_ref::<AgentStep>() {
+                    let text = serde_json::to_string_pretty(step)
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+                return Ok(tool_failure(format!("{error:#}")));
+            }
+        };
         tracing::info!(
             slug = %slug,
             clusters = report.clusters,

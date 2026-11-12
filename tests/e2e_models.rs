@@ -42,6 +42,7 @@ fn args(slug: &str, identity: Option<&str>, verification: Option<&str>) -> Avata
         identity_json: identity.map(str::to_string),
         verification_json: verification.map(str::to_string),
         force: true,
+        accept_flagged: false,
     }
 }
 
@@ -67,6 +68,19 @@ fn avatar_create_three_call_flow_writes_a_self_contained_avatar() {
         .to_string();
     assert!(error.contains("verification_json"), "unexpected error: {error}");
     assert!(!store.dir(&slug).join("avatar.json").exists(), "nothing may be written before verification");
+
+    // A failed verification is refused and writes nothing.
+    let error = avatar_create(&args(
+        &slug,
+        Some(identity),
+        Some(r#"{"match_score":0.3,"mismatches":["hair"]}"#),
+    ))
+    .unwrap_err();
+    let step = error
+        .downcast_ref::<avatar_media_mcp::tools::avatar::AgentStep>()
+        .expect("a failed verification is an AgentStep");
+    assert_eq!(step.status, "verification_failed");
+    assert!(!store.dir(&slug).join("avatar.json").exists(), "a failed verification must not write");
 
     // Call 3: both artifacts → the avatar is written and loads back.
     let report = avatar_create(&args(

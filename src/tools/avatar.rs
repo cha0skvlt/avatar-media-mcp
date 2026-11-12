@@ -32,6 +32,98 @@ pub struct AvatarCreateArgs {
     /// Replace an avatar whose canon was already approved by the operator.
     #[serde(default)]
     pub force: bool,
+    /// Operator override: write the avatar even when the verification score is
+    /// below the pass threshold. The agent must not set this on its own; the
+    /// default path rejects a failed verification and writes nothing.
+    #[serde(default)]
+    pub accept_flagged: bool,
+}
+
+/// A normal step of the agent round-trip, not a failure.
+///
+/// `avatar_create` is a multi-call protocol: the server cannot look at the
+/// pictures, so it hands the agent a prompt and waits for the next call. It
+/// travels through `anyhow::Error` (so `avatar_create`'s signature and every
+/// existing `.unwrap_err().to_string()` caller keep working), and the MCP layer
+/// downcasts it into an ordinary successful tool result instead of a JSON-RPC
+/// error. `Display` prints only `message`, exactly the text the old `bail!` had.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentStep {
+    /// `needs_identity` | `needs_verification` | `verification_failed`.
+    pub status: &'static str,
+    /// What the server needs from the agent, or why the write was refused.
+    pub message: String,
+    /// The exact next call to make.
+    pub next: &'static str,
+}
+
+impl AgentStep {
+    pub fn needs_identity(message: String) -> Self {
+        Self {
+            status: "needs_identity",
+            message,
+            next: "Inspect the representative images, then call avatar_create again with the same arguments plus identity_json.",
+        }
+    }
+
+    pub fn needs_verification(message: String) -> Self {
+        Self {
+            status: "needs_verification",
+            message,
+            next: "Compare the description with the representative images, then call avatar_create again with the same arguments plus verification_json.",
+        }
+    }
+
+    pub fn verification_failed(score: f32, mismatches: &[String]) -> Self {
+        let detail = if mismatches.is_empty() {
+            "no mismatches were listed".to_string()
+        } else {
+            mismatches.join("; ")
+        };
+        Self {
+            status: "verification_failed",
+            message: format!(
+                "verification score {score:.2} is below {:.2}; nothing was written. Mismatches: {detail}",
+                textpass::VERIFY_PASS_THRESHOLD
+            ),
+            next: "Fix identity_json to address the mismatches, then call avatar_create again WITHOUT verification_json to get a fresh verification round-trip. Only the operator may pass accept_flagged=true to write anyway.",
+        }
+    }
+}
+
+impl std::fmt::Display for AgentStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for AgentStep {}
+
+/// The verification gate. Returns `Ok(flagged)`; a score under the pass
+/// threshold is an error unless the operator passed `accept_flagged`.
+/// The score itself is the agent's own claim (the server has no eyes), so this
+/// gate enforces the protocol, not the truth of the claim.
+fn gate_verification(
+    verdict: &textpass::VerificationVerdict,
+    accept_flagged: bool,
+    warnings: &mut Vec<String>,
+) -> Result<bool, AgentStep> {
+    if verdict.match_score >= textpass::VERIFY_PASS_THRESHOLD {
+        return Ok(false);
+    }
+    if !accept_flagged {
+        return Err(AgentStep::verification_failed(
+            verdict.match_score,
+            &verdict.mismatches,
+        ));
+    }
+    warnings.push(format!(
+        "verification {:.2} is below {:.2}; written by operator override (accept_flagged=true): {}",
+        verdict.match_score,
+        textpass::VERIFY_PASS_THRESHOLD,
+        verdict.mismatches.join("; ")
+    ));
+    Ok(true)
 }
 
 /// Result of one `avatar_create` call.
@@ -175,10 +267,11 @@ pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateRepo
     }
 
     let Some(identity) = identity else {
-        anyhow::bail!(
-            "{}",
-            round_trip.unwrap_or_else(|| "no text channel produced an identity".into())
-        );
+        let error: anyhow::Error = match round_trip {
+            Some(message) => AgentStep::needs_identity(message).into(),
+            None => anyhow::anyhow!("no text channel produced an identity"),
+        };
+        return Err(error);
     };
     anyhow::ensure!(
         !identity.is_empty(),
@@ -196,24 +289,22 @@ pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateRepo
     let verification = match text_channel_used.as_str() {
         "agent" => match &args.verification_json {
             Some(raw) => textpass::parse_agent_verification(raw)?,
-            None => anyhow::bail!(
-                "{}",
-                textpass::verification_round_trip(&identity, &representative_images)
-            ),
+            None => {
+                return Err(AgentStep::needs_verification(
+                    textpass::verification_round_trip(&identity, &representative_images),
+                )
+                .into());
+            }
         },
         "cloud" => futures::executor::block_on(
             CloudChannel.verify(&identity, &representative_images),
         )?,
         other => anyhow::bail!("unknown text channel {other}"),
     };
-    let verification_flagged = verification.match_score < textpass::VERIFY_PASS_THRESHOLD;
-    if verification_flagged {
-        warnings.push(format!(
-            "verification below {:.2}: {}",
-            textpass::VERIFY_PASS_THRESHOLD,
-            verification.mismatches.join("; ")
-        ));
-    }
+    // A failed verification must never become a canon: refuse before anything
+    // is committed (the staging directory is dropped and removed on return).
+    let verification_flagged =
+        gate_verification(&verification, args.accept_flagged, &mut warnings)?;
 
     // Every path inside avatar.json is relative to the avatar directory.
     let relative = |path: &str| -> String {
@@ -299,7 +390,61 @@ mod tests {
             identity_json: None,
             verification_json: None,
             force: false,
+            accept_flagged: false,
         }
+    }
+
+    fn verdict(score: f32, mismatches: &[&str]) -> textpass::VerificationVerdict {
+        textpass::VerificationVerdict {
+            match_score: score,
+            mismatches: mismatches.iter().map(|m| m.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn gate_passes_at_or_above_the_threshold() {
+        let mut warnings = Vec::new();
+        let flagged =
+            gate_verification(&verdict(textpass::VERIFY_PASS_THRESHOLD, &[]), false, &mut warnings)
+                .unwrap();
+        assert!(!flagged);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn gate_refuses_a_failed_verification_by_default() {
+        let mut warnings = Vec::new();
+        let step = gate_verification(&verdict(0.3, &["hair colour", "age"]), false, &mut warnings)
+            .unwrap_err();
+        assert_eq!(step.status, "verification_failed");
+        assert!(step.message.contains("hair colour; age"), "{}", step.message);
+        assert!(step.message.contains("nothing was written"));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn gate_explains_an_empty_mismatch_list() {
+        let mut warnings = Vec::new();
+        let step = gate_verification(&verdict(0.1, &[]), false, &mut warnings).unwrap_err();
+        assert!(step.message.contains("no mismatches were listed"));
+    }
+
+    #[test]
+    fn operator_override_writes_but_stays_flagged() {
+        let mut warnings = Vec::new();
+        let flagged = gate_verification(&verdict(0.3, &["age"]), true, &mut warnings).unwrap();
+        assert!(flagged);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("accept_flagged"));
+    }
+
+    #[test]
+    fn agent_step_survives_the_anyhow_round_trip() {
+        // The MCP layer relies on this downcast to tell a protocol step from a failure.
+        let error: anyhow::Error = AgentStep::needs_identity("describe me".into()).into();
+        let step = error.downcast_ref::<AgentStep>().expect("downcast");
+        assert_eq!(step.status, "needs_identity");
+        assert_eq!(error.to_string(), "describe me");
     }
 
     #[test]

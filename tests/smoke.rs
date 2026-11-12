@@ -266,6 +266,7 @@ fn slug_traversal_is_refused() {
         identity_json: None,
         verification_json: None,
         force: false,
+        accept_flagged: false,
     };
     let error = avatar_create(&args).unwrap_err().to_string();
     assert!(error.contains("slug"), "unexpected error: {error}");
