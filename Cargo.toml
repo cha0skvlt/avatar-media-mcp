@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 description = "Avatar media MCP server: identity storage, generative pipeline, cost control. Companion server for CHA0S AOE."
+license = "PolyForm-Shield-1.0.0"
+repository = "https://github.com/cha0skvlt/cha0s_avatar_mcp"
 
 [dependencies]
 rmcp = { version = "0.3", features = ["server", "macros", "transport-io"] }

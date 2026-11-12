@@ -1,7 +1,29 @@
 /target
 .env
+.env.*
+!.env.example
 avatars/
 models/
 .DS_Store
 *.swp
 *.tmp
+
+# Model weights and runtime libs — never in the repo
+*.onnx
+*.f32
+*.dylib
+*.so
+*.dll
+
+# Local media, caches, exports
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.mp4
+*.mov
+*.wav
+*.mp3
+/cache/
+/out/
+/exports/

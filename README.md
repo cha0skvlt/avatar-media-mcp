@@ -4,6 +4,11 @@ Rust MCP server for generative media with avatars. The agent is the brain
 (script, dialogue, approvals); this server executes everything that costs money
 or touches files.
 
+> **Status: active build (work in progress).** The identity core, the face-swap
+> pipeline and `avatar_create` are implemented and tested; the generation
+> pipeline (TTS, keyframes, shots, assembly) is stubbed at M2–M6. See
+> `ARCHITECTURE.md` for the per-module status map.
+
 **Live today:** `faceswap` (FS1) and `avatar_create` (M1), plus `providers_check`
 (preflight). The remaining 14 tools answer with an explicit "planned for M<n>"
 error.
@@ -88,7 +93,7 @@ ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
 ## Tests
 
 ```bash
-cargo test --features local-identity            # 111 tests, hermetic
+cargo test --features local-identity            # 107 tests, hermetic (+1 ignored)
 DATABASE_URL=postgres://localhost/avatar_media_qa \
   cargo test --features local-identity --test db
 AVATAR_E2E_PHOTOS=/path/to/photos ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
@@ -107,3 +112,11 @@ The `db` test skips itself when `DATABASE_URL` is unset. The `e2e_models` test i
 - Postgres with pgvector — only for stateful tools (M2). `CREATE EXTENSION vector`
   in `0001_init.sql` needs a superuser; on a managed instance create the
   extension first.
+
+## License
+
+PolyForm Shield License 1.0.0 — see `LICENSE`. Source-available: you may read,
+run, modify and redistribute the code, but not use it to provide a product that
+competes with this software or with a product the licensor provides using it.
+
+Required Notice: Copyright 2026 cha0skvlt (https://github.com/cha0skvlt)
