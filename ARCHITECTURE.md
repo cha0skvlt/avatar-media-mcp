@@ -23,7 +23,7 @@ Markers:
 
 `avatar-media-mcp` is a Rust MCP server (cargo crate, edition 2024) — the hands of the CHA0S AOE IDE agent for generative media with avatars. The agent is the brain (script, dialogue, approvals); the server executes everything that costs money or touches files: stores avatars, generates voiceover/frames/clips through external models, assembles the final cut through ffmpeg, tracks spend, and refuses to exceed the budget.
 
-**The server is provider-neutral.** Models are data in `config/models.yaml` (role → tier → provider/model/price), and every provider call goes through the traits in `src/providers/base.rs`. Pipeline stages that call a provider take a `Tier`; the adapter is chosen from the registry, so no stage names a vendor. The same holds for the other axes: avatar consent type, language, platform profile and output format are data, not code.
+**The server is provider-neutral.** Models are data in `config/models.yaml` (role → tier → provider/model/price), and every provider call goes through the traits in `src/providers/base.rs`. Pipeline stages that call a provider take a `Tier`; the adapter is chosen from the registry, so no stage names a vendor. The same holds for the other axes: language, platform profile and output format are data, not code.
 
 **State today:** the identity core (mathematics + local ArcFace inference + reference clustering + the text-channel contract) works and is tested; the face-swap pipeline (§10, FS1) works; `avatar_create` is a live MCP tool that produces `avatar.json` + an identity model from a photo set; the data skeleton (domain types, configs, Postgres schema, cache, ffmpeg availability check) is in place. The generation pipeline — TTS, keyframes, TALK, BROLL, assembly — is stubbed at M2–M6, and 14 of the 17 registered MCP tools answer with an explicit "planned for M<n>".
 
@@ -53,7 +53,7 @@ avatar-media-mcp/                # the crate — 9092 lines of Rust
 │   ├── 0001_init.sql            # 6 tables (§7)
 │   └── 0002_integrity.sql       # unique request_id, identity_scores FK, ON DELETE CASCADE
 ├── models/                      # insightface/buffalo_l, faceswap, ort/lib — the weights
-├── avatars/                     # <slug>/{avatar.json, consent.json, identity_model.json, refs/}
+├── avatars/                     # <slug>/{avatar.json, identity_model.json, refs/}
 ├── examples/
 │   └── pairwise.rs              #  54  cosine distribution over an identity_model.json
 ├── src/
@@ -71,9 +71,9 @@ avatar-media-mcp/                # the crate — 9092 lines of Rust
 │   ├── providers/               # 176  base 87, registry 40, fal/elevenlabs/fish/byteplus 37
 │   ├── pipeline/                # 1674 faceswap 1296, qc 160, avatar_build 134, assemble 24,
 │   │                            #      audio 19, keyframes 14, shots 14
-│   ├── infra/                   # 983  avatar_store 532, cache 106, ledger 96, store 50,
+│   ├── infra/                   # 944  avatar_store 493, cache 106, ledger 96, store 50,
 │   │                            #      image_io 69, paths 62, ffmpeg 59
-│   ├── tools/                   # 552  avatar.rs 392 — `avatar_create`; health.rs 155 — preflight
+│   ├── tools/                   # 487  avatar.rs 333 — `avatar_create`; health.rs 154 — preflight
 │   └── series.rs                #  16  M7 stubs
 └── tests/
     ├── integration.rs           #  50  5 tests
@@ -82,7 +82,7 @@ avatar-media-mcp/                # the crate — 9092 lines of Rust
     └── e2e_models.rs            #  94  1 test — #[ignore], needs weights + photos
 ```
 
-Counters: `cargo test --features local-identity` → **111/111 green** (86 lib unit + 5 integration + 19 smoke + 1 db), plus **1 ignored** (`e2e_models`). `cargo check --features local-identity --all-targets` → **0 warnings**. `cargo clippy --all-targets` → **0 warnings**.
+Counters: `cargo test --features local-identity` → **107/107 green** (83 lib unit + 5 integration + 18 smoke + 1 db), plus **1 ignored** (`e2e_models`). `cargo check --features local-identity --all-targets` → **0 warnings**. `cargo clippy --all-targets` → **0 warnings**.
 
 Runtime path rule: the server resolves `models/insightface/buffalo_l`, `models/faceswap` and writes `avatars/<slug>/` **relative to the process cwd**. It must be launched with `cwd = avatar-media-mcp`.
 
@@ -178,7 +178,7 @@ Status: `avatar_create` drives the agent transport with `describe` + `parse_agen
 
 | File | Contents |
 | --- | --- |
-| `avatar.rs` | `Avatar` (schema_version, slug, display_name, consent_ref, identity, persona, voice, prompt_blocks, refs, created_at, canon_approved_at), `Identity`, `Hair`, `Persona`, `VoiceRef`, `PromptBlocks` (+`RefBinding`), `Refs`, `Consent` (+`ConsentSubject`: self / third_party / fictional — hard gate), `IdentityModel` |
+| `avatar.rs` | `Avatar` (schema_version, slug, display_name, identity, persona, voice, prompt_blocks, refs, created_at, canon_approved_at), `Identity`, `Hair`, `Persona`, `VoiceRef`, `PromptBlocks` (+`RefBinding`), `Refs`, `IdentityModel` |
 | `project.rs` | `Brief` (cast ≥1, format: photo/portrait_set/video_short/video_long/film, platform, language, goal, budget_cap_usd, series_id, materials), `ProjectState` (Draft→ScriptSubmitted→Estimated→Approved→Rendering→Assembled→Done) |
 | `script.rs` | `Script` (title, language, platform, hook, cast, shots), `Shot` (id, type TALK/BROLL/SCREEN/TITLE, vo, visual, characters, speaking, framing CU/MCU/MS/WS, wardrobe, motion, est_seconds) |
 | `job.rs` | `Job` (id, project_id, state, stage, percent, spent_usd, provider_requests for resumability, error, timestamps) |
@@ -189,7 +189,7 @@ Status: `avatar_create` drives the agent transport with `describe` + `parse_agen
 
 `IdentityModel` = `face_embeddings: BTreeMap<path, Vec<f32>>`, `face_model`, `body_model`, `identity_threshold`.
 
-Path rule: every path inside `avatar.json` and `identity_model.json` is **relative to the avatar directory** (`refs/01.jpg`, `consent.json`). `AvatarStore` (§8) enforces it on write and resolves it on read.
+Path rule: every path inside `avatar.json` and `identity_model.json` is **relative to the avatar directory** (`refs/01.jpg`). `AvatarStore` (§8) enforces it on write and resolves it on read.
 
 ---
 
@@ -225,7 +225,7 @@ The AOE agent reads these tables directly through `kb`/`database`; the `cost_led
 
 | File | Status | Contents |
 | --- | --- | --- |
-| `avatar_store.rs` | ✅ | the only avatar writer/reader: `save` refuses absolute or missing refs and a primary outside `refs.set`; `load` refuses a directory whose refs disappeared; `list`; atomic writes. Layout: `avatar.json`, `consent.json`, `identity_model.json`, `refs/NN.jpg` |
+| `avatar_store.rs` | ✅ | the only avatar writer/reader: `save` refuses absolute or missing refs and a primary outside `refs.set`; `load` refuses a directory whose refs disappeared; `list`; atomic writes. Layout: `avatar.json`, `identity_model.json`, `refs/NN.jpg` |
 | `image_io.rs` | ✅ | `open_limited` / `open_rgb8`: every decode is bounded (≤12000 px side, ≤512 MB) — a decompression bomb is an error |
 | `paths.rs` | ✅ | `confine_output`: tool writes must resolve inside the workspace; reads stay unrestricted |
 | `cache.rs` | ✅ | content-addressed cache: `key(provider, model, params, input_hashes)` = SHA-256 over length-prefixed fields (no boundary collisions); `put` writes a temp file and renames (a crash cannot leave a truncated hit); `get`, `file_hash()` |
@@ -266,7 +266,7 @@ The AOE agent reads these tables directly through `kb`/`database`; the `cost_led
 | Tool | State | Notes |
 | --- | --- | --- |
 | `faceswap` | ✅ | `source_path`, `target_path`, `out_path` (confined to the workspace); swaps exactly one face (best-scoring detection); 120 s timeout |
-| `avatar_create` | ✅ | `photos` (1–30), `slug`, `consent`, `text_channel`, `identity_json`, `verification_json`, `force`; three-call flow; 900 s timeout |
+| `avatar_create` | ✅ | `photos` (1–30), `slug`, `text_channel`, `identity_json`, `verification_json`, `force`; three-call flow; 900 s timeout |
 | `providers_check` | ✅ | preflight: config files, key presence, ORT dylib, model dirs, ffmpeg, avatars root, DATABASE_URL — reads config and env only |
 | `avatar_list`, `avatar_status`, `avatar_approve_canon` | ⬜ M1 | |
 | `project_create`, `script_submit` | ⬜ M1 | |
@@ -279,23 +279,23 @@ Stubs answer with `invalid_params` and the milestone they belong to — the cont
 
 **Face swap is agent-callable two ways.** The MCP tool above, and the CLI `src/bin/faceswap.rs` (`<face> <target> <out.png>`). Same crate, same `SwapEngine`, same weights — both wrap `SwapEngine::swap_face` unchanged.
 
-**`avatar_create` flow** (`tools/avatar.rs`): slug validation → approved-canon guard (`force`) → consent gate (third_party parses and checks `consent.json`) → `normalize_photo` into a **staging** `refs/NN.jpg` → per-photo quality gate → `compute_embeddings` → near-duplicate removal (cosine > 0.9999) → `auto_threshold` → `cluster_references` (medoid-ordered) → `NumericSummary` → channel loop → **verification** → `build_prompt_blocks` → `Staging::commit` (swap into place) → report (clusters, representatives, threshold, skipped/duplicate images, channel used, verdict, flag, warnings). A failed rebuild leaves the live avatar untouched. Blocking ONNX work runs inside `spawn_blocking` under a timeout; the async channel calls are driven by `futures::executor::block_on`.
+**`avatar_create` flow** (`tools/avatar.rs`): slug validation → approved-canon guard (`force`) → `normalize_photo` into a **staging** `refs/NN.jpg` → per-photo quality gate → `compute_embeddings` → near-duplicate removal (cosine > 0.9999) → `auto_threshold` → `cluster_references` (medoid-ordered) → `NumericSummary` → channel loop → **verification** → `build_prompt_blocks` → `Staging::commit` (swap into place) → report (clusters, representatives, threshold, skipped/duplicate images, channel used, verdict, flag, warnings). A failed rebuild leaves the live avatar untouched. Blocking ONNX work runs inside `spawn_blocking` under a timeout; the async channel calls are driven by `futures::executor::block_on`.
 
 **Verification is a second round-trip.** With `identity_json` but no `verification_json`, `avatar_create` returns the verification prompt (description + the same representatives) and writes nothing. The agent answers `{"match_score": 0..1, "mismatches": [...]}`; `parse_agent_verification` rejects anything outside `[0, 1]`; `verification_flagged = match_score < 0.8`. `AgentChannel::verify` fails with that round-trip request.
 
 ---
 
-## 12. Tests — ✅ 111/111 (+1 ignored)
+## 12. Tests — ✅ 107/107 (+1 ignored)
 
-`cargo test --features local-identity` → 86 lib unit + 5 integration + 19 smoke + 1 db, all green; `e2e_models` is `#[ignore]`d. The default suite is hermetic: pure functions and temp directories. The `db` test skips itself when `DATABASE_URL` is unset.
+`cargo test --features local-identity` → 83 lib unit + 5 integration + 18 smoke + 1 db, all green; `e2e_models` is `#[ignore]`d. The default suite is hermetic: pure functions and temp directories. The `db` test skips itself when `DATABASE_URL` is unset.
 
 - **`pipeline/faceswap.rs`** (18): affine invert/scale, Umeyama (similarity, identity, isotropic covariance), Reinhard (noop, mean shift), hull/fill/masks, mouth MAR and keep hole, ellipse fallback, warp identity/translation, paste mask and forward-sampler round-trip, unusable-landmark contour returns an empty mask.
 - **`identity/scoring.rs`** (13): calibration (known separability, auto-pass refusal, disabled-fail flag consistency), drift (stable / linear decline / step / outlier, angle offsets), assignment (K≠M, twin canons, swap), clip aggregation, fusion (training, channel conflict, source mismatch), per-avatar pass threshold cannot invert the gate.
 - **`identity/textpass.rs`** (7): base64 RFC 4648 vectors, wrapped-JSON parsing, `do_not_change` filtering, agent describe round-trip, agent verify refuses to verify on the agent's behalf, verification payload validation (`match_score` outside `[0,1]` rejected), prompt-block rendering (empty identity stays empty, hair dropped on multi-state).
 - **`identity/arcface.rs`** (5): affine roundtrip, solve6, bbox/SCRFD component indexing, ambiguous-shape rejection, IoU.
 - **`identity/clusters.rs`** (6): two appearance states, single state, empty input, closest-cluster assignment, invalid vectors rejected, order-independence (reversed input → same clusters).
-- **`tools/avatar.rs`** (5): slug traversal rejected, near-duplicate removal, consent gate before I/O, third-party consent file required, photo count bounded.
-- **`infra/avatar_store.rs`** (12): save/load roundtrip, absolute refs refused, missing ref refused on save, primary must be in the set, a ref that disappeared is reported on load, missing model file is an error, slug traversal refused, staging commit replaces the live avatar, dropped staging leaves it untouched, schema_version mismatch refused, slug mismatch refused, consent parsed not just present.
+- **`tools/avatar.rs`** (3): slug traversal rejected, near-duplicate removal, photo count bounded.
+- **`infra/avatar_store.rs`** (11): save/load roundtrip, absolute refs refused, missing ref refused on save, primary must be in the set, a ref that disappeared is reported on load, missing model file is an error, slug traversal refused, staging commit replaces the live avatar, dropped staging leaves it untouched, schema_version mismatch refused, slug mismatch refused.
 - **`infra/image_io.rs`** (3): oversized image refused, normal photo accepted, missing file is an error.
 - **`infra/paths.rs`** (3): output inside the workspace allowed, outside refused, traversal refused.
 - **`config/settings.rs`** (4): defaults valid, file overrides defaults, missing file falls back, zero/NaN budget and zero concurrency refused.
@@ -306,7 +306,7 @@ Stubs answer with `invalid_params` and the milestone they belong to — the cont
 - **`identity/embeddings.rs`** (2): checked cosine rejects invalid vectors, source mismatch is an error.
 - **`identity/threed.rs`** (1): geometry parameter validation.
 - **`tests/integration.rs`** (5): cache-key determinism (×2), cosine of identical, stage1 boundaries, `each_to_own_canon` swap detection.
-- **`tests/smoke.rs`** (19): config files parse and resolve, settings load from the real file, canonical avatar layout is self-contained (save → load → refs resolve), verification round-trip is explicit, migration declares the six tables + pgvector, `avatar.json`/`IdentityModel` roundtrip, consent gate and slug traversal refused before I/O, every stub returns an error instead of panicking, ffmpeg availability reported, identity core determinism, clustering, text-channel contract, cache roundtrip, QC action mapping, empty identity is a valid document, parsers never panic on 500 pseudo-random payloads, preflight reports the real configuration, the per-avatar threshold reaches the QC gate.
+- **`tests/smoke.rs`** (18): config files parse and resolve, settings load from the real file, canonical avatar layout is self-contained (save → load → refs resolve), verification round-trip is explicit, migration declares the six tables + pgvector, `avatar.json`/`IdentityModel` roundtrip, slug traversal refused before I/O, every stub returns an error instead of panicking, ffmpeg availability reported, identity core determinism, clustering, text-channel contract, cache roundtrip, QC action mapping, empty identity is a valid document, parsers never panic on 500 pseudo-random payloads, preflight reports the real configuration, the per-avatar threshold reaches the QC gate.
 - **`tests/db.rs`** (1, skipped without `DATABASE_URL`): ledger cap enforced inside a transaction, duplicate `request_id` rejected, unknown project refused, `ON DELETE CASCADE` removes ledger rows.
 - **`tests/e2e_models.rs`** (1, `#[ignore]`): the full three-call `avatar_create` on real photos — round-trip 1, round-trip 2, write, then `AvatarStore::load` with every ref inside the avatar directory.
 
@@ -329,25 +329,24 @@ Every row names symbols that exist in the tree; the milestone is the tag their `
 
 ## 14. Accepted decisions (fixed)
 
-1. **Any avatar**: self/third_party (consent) / fictional (statement) — `consent.json` is mandatory.
-2. **Default language is English**; others are explicit.
-3. **Full script-driven generation**: cast, character interaction, B-roll, graphics. Not a "talking head".
-4. **Budget $5…$500** — tier and cap are chosen before `script_submit`; the approval gate is mandatory.
-5. **Music is optional** — absent from materials → the video is validly assembled without it.
-6. **No auto-publishing** — the server exports a package; the operator uploads.
-7. **AI-disclosure is on by default** in metadata.json; removal is an explicit decision.
-8. **Language is Rust** (rmcp Tier-1); providers over REST (reqwest); heavy ML is ONNX (`ort`) or API.
-9. **State is Postgres** (one contour with the agent via kb/database); pgvector for identity scores; DSN is mandatory once a stateful tool lands.
-10. **ArcFace uses open buffalo_l weights** (InsightFace); the per-character hook is `IdentityModel` + per-avatar thresholds.
-11. **The project is monolingual — Rust.**
-12. **Provider neutrality**: models are data in `config/models.yaml`; every provider call goes through the traits in `src/providers/base.rs`; a vendor name lives only in an adapter file, the registry config and the key list.
-13. **ArcFace-first identity pipeline** (§4.5): the numeric lock is built first and grounds the text; the text description is produced by a vision channel over cluster artifacts and validated by reverse verification; it never precedes the numbers. **Transports**: the multimodal agent (default, round-trip via `identity_json` + `verification_json`) and cloud vision (M0/M2).
+1. **Default language is English**; others are explicit.
+2. **Full script-driven generation**: cast, character interaction, B-roll, graphics. Not a "talking head".
+3. **Budget $5…$500** — tier and cap are chosen before `script_submit`; the approval gate is mandatory.
+4. **Music is optional** — absent from materials → the video is validly assembled without it.
+5. **No auto-publishing** — the server exports a package; the operator uploads.
+6. **AI-disclosure is on by default** in metadata.json; removal is an explicit decision.
+7. **Language is Rust** (rmcp Tier-1); providers over REST (reqwest); heavy ML is ONNX (`ort`) or API.
+8. **State is Postgres** (one contour with the agent via kb/database); pgvector for identity scores; DSN is mandatory once a stateful tool lands.
+9. **ArcFace uses open buffalo_l weights** (InsightFace); the per-character hook is `IdentityModel` + per-avatar thresholds.
+10. **The project is monolingual — Rust.**
+11. **Provider neutrality**: models are data in `config/models.yaml`; every provider call goes through the traits in `src/providers/base.rs`; a vendor name lives only in an adapter file, the registry config and the key list.
+12. **ArcFace-first identity pipeline** (§4.5): the numeric lock is built first and grounds the text; the text description is produced by a vision channel over cluster artifacts and validated by reverse verification; it never precedes the numbers. **Transports**: the multimodal agent (default, round-trip via `identity_json` + `verification_json`) and cloud vision (M0/M2).
 
 ---
 
 ## 15. Properties of the current code
 
-- `AvatarStore` reads and writes one layout: `avatar.json`, `consent.json`, `identity_model.json`, `refs/NN.jpg`; every path inside the JSON is relative to the avatar directory.
+- `AvatarStore` reads and writes one layout: `avatar.json`, `identity_model.json`, `refs/NN.jpg`; every path inside the JSON is relative to the avatar directory.
 - Two `FaceEmbedding` types: `identity::arcface::FaceEmbedding { vector, landmarks }` and `identity::embeddings::FaceEmbedding { vector, source }`; callers convert explicitly.
 - `each_to_own_canon` (greedy) sits next to the Hungarian `assign_faces_to_canons`; the server uses the Hungarian one.
 - `models/` holds ~370 MB of weights — buffalo_l, faceswap, ort/lib — downloaded per machine from HuggingFace `ApacheOne/insightface`.

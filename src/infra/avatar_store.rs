@@ -3,7 +3,6 @@
 //! ```text
 //! avatars/<slug>/
 //! ├── avatar.json          # every path inside is relative to this directory
-//! ├── consent.json
 //! ├── identity_model.json
 //! └── refs/NN.jpg          # normalized copies — the canon
 //! ```
@@ -16,10 +15,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::domain::avatar::{Avatar, Consent, IdentityModel, SCHEMA_VERSION};
+use crate::domain::avatar::{Avatar, IdentityModel, SCHEMA_VERSION};
 
 pub const AVATAR_FILE: &str = "avatar.json";
-pub const CONSENT_FILE: &str = "consent.json";
 pub const MODEL_FILE: &str = "identity_model.json";
 pub const REFS_DIR: &str = "refs";
 
@@ -104,18 +102,6 @@ impl AvatarStore {
             dir,
             committed: false,
         })
-    }
-
-    /// Read and validate `consent.json`. The consent gate is a document, not a
-    /// file-existence check.
-    pub fn load_consent(&self, slug: &str) -> Result<Consent> {
-        Self::validate_slug(slug)?;
-        let path = self.dir(slug).join(CONSENT_FILE);
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
-        let consent: Consent = serde_json::from_str(&raw)
-            .with_context(|| format!("parse {}", path.display()))?;
-        Ok(consent)
     }
 
     fn save_into(dir: &Path, avatar: &Avatar, model: &IdentityModel) -> Result<PathBuf> {
@@ -324,7 +310,6 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             slug: slug.into(),
             display_name: slug.into(),
-            consent_ref: CONSENT_FILE.into(),
             identity: identity(),
             persona: None,
             voice: None,
@@ -494,30 +479,6 @@ mod tests {
         .unwrap();
         let error = store.load("smoke").unwrap_err().to_string();
         assert!(error.contains("contains slug"), "unexpected error: {error}");
-    }
-
-    #[test]
-    fn consent_is_parsed_not_just_present() {
-        let (_dir, store) = store_with_refs();
-        let avatar = avatar("smoke", vec!["refs/01.jpg".into()]);
-        store.save(&avatar, &model()).unwrap();
-        std::fs::write(store.dir("smoke").join(CONSENT_FILE), b"not json").unwrap();
-        assert!(store.load_consent("smoke").is_err());
-
-        let consent = crate::domain::avatar::Consent {
-            subject: crate::domain::avatar::ConsentSubject::ThirdParty,
-            statement: "signed".into(),
-            date: "2026-11-12".into(),
-            scope: vec!["avatar".into()],
-            written_consent_path: None,
-        };
-        std::fs::write(
-            store.dir("smoke").join(CONSENT_FILE),
-            serde_json::to_vec(&consent).unwrap(),
-        )
-        .unwrap();
-        let parsed = store.load_consent("smoke").unwrap();
-        assert_eq!(parsed.subject, crate::domain::avatar::ConsentSubject::ThirdParty);
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Avatar identity profile.
 //!
 //! `avatars/<slug>/` holds `avatar.json` (identity, persona, voice,
-//! prompt_blocks, refs), `consent.json` (hard gate), `identity_model.json`
-//! (ArcFace embeddings + per-avatar threshold) and `refs/NN.jpg` (the canon).
+//! prompt_blocks, refs), `identity_model.json` (ArcFace embeddings +
+//! per-avatar threshold) and `refs/NN.jpg` (the canon).
 //! Every path inside `avatar.json` is relative to the avatar directory;
 //! `AvatarStore` enforces that on write and resolves it on read.
 
@@ -45,7 +45,6 @@ pub struct Avatar {
     pub schema_version: u32,
     pub slug: String,
     pub display_name: String,
-    pub consent_ref: String,
     pub identity: Identity,
     #[serde(default)]
     pub persona: Option<Persona>,
@@ -123,26 +122,6 @@ pub struct RefBinding {
 pub struct Refs {
     pub primary: String,
     pub set: Vec<String>,
-}
-
-/// Consent gate. avatar_create refuses without it.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct Consent {
-    pub subject: ConsentSubject,
-    pub statement: String,
-    pub date: String,
-    pub scope: Vec<String>,
-    /// Required for third_party: path to the written consent file.
-    #[serde(default)]
-    pub written_consent_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ConsentSubject {
-    Self_,
-    ThirdParty,
-    Fictional,
 }
 
 /// Mathematical identity lock, stored in identity_model.json.

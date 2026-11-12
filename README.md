@@ -56,7 +56,7 @@ lists the names.
 config/            models.yaml (registry), platforms.yaml (export rules), settings.yaml (runtime knobs)
 migrations/        0001_init.sql (schema), 0002_integrity.sql (unique request_id, FKs, cascade)
 models/            insightface/buffalo_l, faceswap, ort/lib
-avatars/           <slug>/{avatar.json, consent.json, identity_model.json, refs/NN.jpg}
+avatars/           <slug>/{avatar.json, identity_model.json, refs/NN.jpg}
 src/config/        models, platforms, settings (figment loader)
 src/domain/        avatar, project, script, job, cost, series — types only
 src/identity/      scoring (decisions), arcface (SCRFD + ArcFace), clusters, textpass, embeddings, threed
@@ -74,7 +74,7 @@ tests/             integration, smoke, db (needs DATABASE_URL), e2e_models (igno
 # Avatar from a folder of photos (writes through the same AvatarStore as the tool)
 ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
   cargo run --features local-identity --bin avatar_build -- \
-  --name <slug> --photos <dir> --consent self
+  --name <slug> --photos <dir>
 
 # Face swap
 ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \

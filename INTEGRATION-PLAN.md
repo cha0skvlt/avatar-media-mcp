@@ -20,7 +20,7 @@ The toolkit is useful as a **reference implementation of the shape**, not as a p
 | `adk-rust-mcp-common` | 3993 | error taxonomy: `api(endpoint, status, body)`, `timeout(secs)`, `ffmpeg(stderr)`, `validation` | transport, config, GCS, OTel |
 | `composer`, `graphics`, `diagrams`, `artist`, `education`, `music` | ~1500 | — | all of it |
 
-What the toolkit does not have and we keep writing ourselves: word timings, identity QC, canon, consent, budget, multi-character assignment.
+What the toolkit does not have and we keep writing ourselves: word timings, identity QC, canon, budget, multi-character assignment.
 
 ## 3. Waves
 

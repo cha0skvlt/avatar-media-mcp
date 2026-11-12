@@ -7,7 +7,7 @@ use anyhow::Context;
 
 use crate::identity::clusters::{self, Reference};
 use crate::identity::textpass::{self, AgentChannel, CloudChannel, NumericSummary, TextChannel};
-use crate::infra::avatar_store::{AvatarStore, CONSENT_FILE};
+use crate::infra::avatar_store::AvatarStore;
 
 /// Arguments of `avatar_create`.
 #[derive(Debug, Clone, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -16,8 +16,6 @@ pub struct AvatarCreateArgs {
     pub photos: Vec<String>,
     /// Avatar slug (filesystem-safe, e.g. `eugene`).
     pub slug: String,
-    /// Consent: `self`, `third_party` (requires a signed consent.json), `fictional`.
-    pub consent: String,
     /// Text channel: `agent` (default), `cloud` (M0/M2).
     #[serde(default)]
     pub text_channel: Option<String>,
@@ -55,11 +53,6 @@ pub struct AvatarCreateReport {
 /// The whole M1 pipeline for one avatar. Blocking (ONNX) work runs here;
 /// the MCP layer wraps it in `spawn_blocking`.
 pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateReport> {
-    // Consent hard gate.
-    anyhow::ensure!(
-        matches!(args.consent.as_str(), "self" | "third_party" | "fictional"),
-        "consent must be self | third_party | fictional"
-    );
     AvatarStore::validate_slug(&args.slug)?;
     anyhow::ensure!(
         !args.photos.is_empty() && args.photos.len() <= 30,
@@ -68,7 +61,6 @@ pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateRepo
 
     let store = AvatarStore::default();
     let live_dir = store.dir(&args.slug);
-    let consent_path = live_dir.join(CONSENT_FILE);
 
     // An approved canon is the operator's decision: replacing it must be explicit.
     if !args.force {
@@ -84,21 +76,6 @@ pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateRepo
                 existing.canon_approved_at.unwrap_or_default()
             );
         }
-    }
-
-    if args.consent == "third_party" {
-        let consent = store.load_consent(&args.slug).with_context(|| {
-            format!(
-                "third_party consent requires a valid {}",
-                consent_path.display()
-            )
-        })?;
-        anyhow::ensure!(
-            consent.subject == crate::domain::avatar::ConsentSubject::ThirdParty,
-            "{} declares subject {:?}, not third_party",
-            consent_path.display(),
-            consent.subject
-        );
     }
 
     // Phase 1a: normalize into a staging directory — the canon must live inside
@@ -238,28 +215,6 @@ pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateRepo
         ));
     }
 
-    // The consent gate is only real if the referenced file exists: write it
-    // for self/fictional, never overwrite a signed third-party document.
-    if !consent_path.exists() {
-        let consent_doc = crate::domain::avatar::Consent {
-            subject: match args.consent.as_str() {
-                "third_party" => crate::domain::avatar::ConsentSubject::ThirdParty,
-                "fictional" => crate::domain::avatar::ConsentSubject::Fictional,
-                _ => crate::domain::avatar::ConsentSubject::Self_,
-            },
-            statement: match args.consent.as_str() {
-                "fictional" => "Fictional character; no real person is depicted".to_string(),
-                _ => "Operator asserts the right to use these reference photos".to_string(),
-            },
-            date: chrono::Utc::now().date_naive().to_string(),
-            scope: vec!["avatar".into(), "generated_media".into()],
-            written_consent_path: None,
-        };
-        std::fs::create_dir_all(&live_dir)?;
-        std::fs::write(&consent_path, serde_json::to_vec_pretty(&consent_doc)?)
-            .context("write consent.json")?;
-    }
-
     // Every path inside avatar.json is relative to the avatar directory.
     let relative = |path: &str| -> String {
         Path::new(path)
@@ -273,7 +228,6 @@ pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateRepo
         schema_version: crate::domain::avatar::SCHEMA_VERSION,
         slug: args.slug.clone(),
         display_name: args.slug.clone(),
-        consent_ref: CONSENT_FILE.into(),
         identity: identity.clone(),
         persona: None,
         voice: None,
@@ -337,11 +291,10 @@ fn dedupe_vectors(
 mod tests {
     use super::*;
 
-    fn args(slug: &str, consent: &str) -> AvatarCreateArgs {
+    fn args(slug: &str) -> AvatarCreateArgs {
         AvatarCreateArgs {
             photos: vec!["missing.png".into()],
             slug: slug.into(),
-            consent: consent.into(),
             text_channel: None,
             identity_json: None,
             verification_json: None,
@@ -371,20 +324,8 @@ mod tests {
     }
 
     #[test]
-    fn consent_gate_rejects_unknown_subject_before_any_io() {
-        let error = avatar_create(&args("smoke", "borrowed")).unwrap_err();
-        assert!(error.to_string().contains("consent"));
-    }
-
-    #[test]
-    fn third_party_consent_requires_a_valid_document() {
-        let error = avatar_create(&args("smoke-third-party", "third_party")).unwrap_err();
-        assert!(error.to_string().contains("consent"), "{error}");
-    }
-
-    #[test]
     fn photo_count_is_bounded() {
-        let mut too_many = args("smoke", "self");
+        let mut too_many = args("smoke");
         too_many.photos = (0..31).map(|i| format!("{i}.png")).collect();
         let error = avatar_create(&too_many).unwrap_err().to_string();
         assert!(error.contains("1..=30"), "unexpected error: {error}");

@@ -38,7 +38,6 @@ fn args(slug: &str, identity: Option<&str>, verification: Option<&str>) -> Avata
     AvatarCreateArgs {
         photos: photos(),
         slug: slug.into(),
-        consent: "self".into(),
         text_channel: Some("agent".into()),
         identity_json: identity.map(str::to_string),
         verification_json: verification.map(str::to_string),
@@ -87,7 +86,6 @@ fn avatar_create_three_call_flow_writes_a_self_contained_avatar() {
         assert!(reference.is_file(), "ref {} missing", reference.display());
         assert!(reference.starts_with(store.dir(&slug)), "ref outside the avatar dir");
     }
-    assert!(loaded.avatar.consent_ref == "consent.json");
     assert!(!loaded.avatar.prompt_blocks.identity.is_empty());
 
     std::fs::remove_dir_all(store.dir(&slug)).expect("cleanup");

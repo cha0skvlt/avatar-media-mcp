@@ -143,7 +143,7 @@ impl AvatarMediaServer {
     }
 
     /// avatar_create: the M1 end-to-end path (live).
-    #[tool(description = "Create an avatar from reference photos. Three calls: (1) no identity_json → returns the cluster representatives + numeric summary; (2) identity_json → returns the verification prompt; (3) identity_json + verification_json {match_score, mismatches} → writes avatars/<slug>/{avatar.json, identity_model.json, consent.json, refs/NN.jpg} atomically. Photos are normalized and quality-gated; an approved canon is never replaced without force=true. Consent must be self | third_party (needs a valid consent.json) | fictional.")]
+    #[tool(description = "Create an avatar from reference photos. Three calls: (1) no identity_json → returns the cluster representatives + numeric summary; (2) identity_json → returns the verification prompt; (3) identity_json + verification_json {match_score, mismatches} → writes avatars/<slug>/{avatar.json, identity_model.json, refs/NN.jpg} atomically. Photos are normalized and quality-gated; an approved canon is never replaced without force=true.")]
     async fn avatar_create(
         &self,
         rmcp::handler::server::tool::Parameters(args): rmcp::handler::server::tool::Parameters<

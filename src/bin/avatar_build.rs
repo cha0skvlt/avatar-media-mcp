@@ -2,42 +2,33 @@
 //! `avatars/<slug>/` through the same `AvatarStore` the MCP tool uses.
 //!
 //! Usage: cargo run --features local-identity --bin avatar_build -- \
-//!   --name <slug> --photos <dir> --consent self
+//!   --name <slug> --photos <dir>
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
 use avatar_media_mcp::domain::avatar::{
-    Avatar, Consent, ConsentSubject, Identity, IdentityModel, PromptBlocks, RefBinding, Refs,
-    SCHEMA_VERSION,
+    Avatar, Identity, IdentityModel, PromptBlocks, RefBinding, Refs, SCHEMA_VERSION,
 };
 use avatar_media_mcp::identity::arcface::FaceEngine;
 use avatar_media_mcp::identity::embeddings::cosine_similarity_checked;
-use avatar_media_mcp::infra::avatar_store::{AvatarStore, CONSENT_FILE};
+use avatar_media_mcp::infra::avatar_store::AvatarStore;
 use avatar_media_mcp::pipeline::avatar_build::normalize_photo;
 
 fn main() -> Result<()> {
     let mut name = String::new();
     let mut photos_dir = PathBuf::new();
-    let mut consent = ConsentSubject::Self_;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--name" => name = args.next().context("--name needs a value")?,
             "--photos" => photos_dir = PathBuf::from(args.next().context("--photos needs a value")?),
-            "--consent" => {
-                consent = match args.next().context("--consent needs a value")?.as_str() {
-                    "self" => ConsentSubject::Self_,
-                    "fictional" => ConsentSubject::Fictional,
-                    other => bail!("unsupported consent for CLI test: {other} (use self|fictional)"),
-                }
-            }
             other => bail!("unknown arg: {other}"),
         }
     }
     if name.is_empty() || !photos_dir.exists() {
-        bail!("usage: avatar_build --name <slug> --photos <dir> [--consent self|fictional]");
+        bail!("usage: avatar_build --name <slug> --photos <dir>");
     }
 
     // 1. Collect photos and normalize them into refs/ (the canon lives inside
@@ -112,19 +103,7 @@ fn main() -> Result<()> {
     // One usable photo has no pair to compare against: the anchor is 1.0.
     let median = if sims.is_empty() { 1.0 } else { sims[sims.len() / 2] };
 
-    // 4. consent.json + avatar.json + identity_model.json via the store.
-    let consent_doc = Consent {
-        subject: consent,
-        statement: "CLI test build; operator asserts rights to the reference images".into(),
-        date: chrono::Utc::now().date_naive().to_string(),
-        scope: vec!["test".into()],
-        written_consent_path: None,
-    };
-    std::fs::write(
-        store.dir(&name).join(CONSENT_FILE),
-        serde_json::to_vec_pretty(&consent_doc)?,
-    )?;
-
+    // 4. avatar.json + identity_model.json via the store.
     let model = IdentityModel {
         face_embeddings: kept
             .iter()
@@ -140,7 +119,6 @@ fn main() -> Result<()> {
         schema_version: SCHEMA_VERSION,
         slug: name.clone(),
         display_name: name.clone(),
-        consent_ref: CONSENT_FILE.into(),
         // The CLI has no vision channel: it must not invent a biometric
         // description. The numeric lock is the canon until a channel fills it.
         identity: Identity {

@@ -1,6 +1,6 @@
 //! Smoke suite: every public entry point the server relies on, exercised
 //! without models, network or ffmpeg. Each case asserts a contract, not a
-//! happy-path print: config files parse, the consent gate holds, stubs return
+//! happy-path print: config files parse, stubs return
 //! errors instead of panicking, and the identity core answers deterministically.
 
 use avatar_media_mcp::config::models::{ModelsConfig, Role, Tier};
@@ -89,7 +89,6 @@ fn avatar_layout_is_canonical_and_self_contained() {
         "schema_version": SCHEMA_VERSION,
         "slug": "smoke",
         "display_name": "smoke",
-        "consent_ref": "consent.json",
         "identity": {
             "apparent_age_range": "", "gender_presentation": "", "face_shape": "",
             "skin_tone": "", "eyes": "brown", "brows": "", "nose": "", "lips": "",
@@ -122,7 +121,6 @@ fn avatar_layout_is_canonical_and_self_contained() {
     let loaded = store.load("smoke").unwrap();
     assert_eq!(loaded.refs.len(), 1);
     assert!(loaded.refs[0].is_absolute());
-    assert_eq!(loaded.avatar.consent_ref, "consent.json");
     assert_eq!(store.list().unwrap(), vec!["smoke".to_string()]);
 }
 
@@ -218,7 +216,6 @@ fn avatar_json_roundtrips_through_serde() {
         "schema_version": SCHEMA_VERSION,
         "slug": "smoke",
         "display_name": "smoke",
-        "consent_ref": "avatars/smoke/consent.json",
         "identity": {
             "apparent_age_range": "30-35",
             "gender_presentation": "androgynous",
@@ -261,26 +258,10 @@ fn avatar_json_roundtrips_through_serde() {
 }
 
 #[test]
-fn consent_gate_blocks_before_touching_models() {
-    let args = AvatarCreateArgs {
-        photos: vec!["does-not-exist.png".into()],
-        slug: "smoke".into(),
-        consent: "borrowed".into(),
-        text_channel: None,
-        identity_json: None,
-        verification_json: None,
-        force: false,
-    };
-    let error = avatar_create(&args).unwrap_err().to_string();
-    assert!(error.contains("consent"), "unexpected error: {error}");
-}
-
-#[test]
 fn slug_traversal_is_refused() {
     let args = AvatarCreateArgs {
         photos: vec!["does-not-exist.png".into()],
         slug: "../../etc".into(),
-        consent: "self".into(),
         text_channel: None,
         identity_json: None,
         verification_json: None,
