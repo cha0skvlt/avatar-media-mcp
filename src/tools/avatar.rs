@@ -172,7 +172,7 @@ pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateRepo
 
     // Phase 1a: normalize into a staging directory — the canon must live inside
     // the avatar directory, and a failed rebuild must not touch the live one.
-    let staging = store.begin_staging(&args.slug)?;
+    let mut staging = store.begin_staging(&args.slug)?;
     let refs_dir = staging.refs_dir();
     let mut normalized = Vec::new();
     let mut skipped = Vec::new();
@@ -268,7 +268,12 @@ pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateRepo
 
     let Some(identity) = identity else {
         let error: anyhow::Error = match round_trip {
-            Some(message) => AgentStep::needs_identity(message).into(),
+            Some(message) => {
+                // The agent has to look at the representatives named in the
+                // message, so the staging directory outlives this call.
+                staging.preserve();
+                AgentStep::needs_identity(message).into()
+            }
             None => anyhow::anyhow!("no text channel produced an identity"),
         };
         return Err(error);
@@ -290,6 +295,7 @@ pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateRepo
         "agent" => match &args.verification_json {
             Some(raw) => textpass::parse_agent_verification(raw)?,
             None => {
+                staging.preserve();
                 return Err(AgentStep::needs_verification(
                     textpass::verification_round_trip(&identity, &representative_images),
                 )
@@ -302,9 +308,19 @@ pub fn avatar_create(args: &AvatarCreateArgs) -> anyhow::Result<AvatarCreateRepo
         other => anyhow::bail!("unknown text channel {other}"),
     };
     // A failed verification must never become a canon: refuse before anything
-    // is committed (the staging directory is dropped and removed on return).
-    let verification_flagged =
-        gate_verification(&verification, args.accept_flagged, &mut warnings)?;
+    // is committed. The staging directory survives so the agent can compare the
+    // description against the representatives it is being pointed at.
+    let verification_flagged = match gate_verification(
+        &verification,
+        args.accept_flagged,
+        &mut warnings,
+    ) {
+        Ok(flagged) => flagged,
+        Err(step) => {
+            staging.preserve();
+            return Err(step.into());
+        }
+    };
 
     // Every path inside avatar.json is relative to the avatar directory.
     let relative = |path: &str| -> String {

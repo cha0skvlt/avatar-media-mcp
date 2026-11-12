@@ -6,7 +6,7 @@
 ![MCP](https://img.shields.io/badge/MCP-rmcp_0.3-6E4AFF)
 ![ONNX](https://img.shields.io/badge/ONNX_Runtime-ort_2.0--rc.15-005CED?logo=onnx&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Postgres-pgvector-4169E1?logo=postgresql&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-113_passing-2ea043)
+![Tests](https://img.shields.io/badge/tests-114_passing-2ea043)
 ![License](https://img.shields.io/badge/license-PolyForm_Shield_1.0.0-blue)
 ![Status](https://img.shields.io/badge/status-under_construction-orange)
 
@@ -98,7 +98,7 @@ the real environment.
 ## Tests
 
 ```bash
-cargo test --features local-identity    # 113 passing, hermetic (+1 ignored)
+cargo test --features local-identity    # 114 passing, hermetic (+1 ignored)
 ```
 
 ## Docs

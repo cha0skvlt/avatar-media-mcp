@@ -85,15 +85,19 @@ impl AvatarStore {
 
     /// Build a new avatar directory beside the live one and swap it in on
     /// `commit`. A failed rebuild leaves the existing avatar untouched.
+    ///
+    /// The path is `<root>/.staging-<slug>` — stable across the protocol
+    /// round-trips, so the representatives handed to the agent stay readable
+    /// between calls. A leftover from an abandoned run is wiped here.
     pub fn begin_staging(&self, slug: &str) -> Result<Staging> {
         Self::validate_slug(slug)?;
         std::fs::create_dir_all(&self.root)
             .with_context(|| format!("create {}", self.root.display()))?;
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = self.root.join(format!(".staging-{slug}-{nanos}"));
+        let dir = self.root.join(format!(".staging-{slug}"));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)
+                .with_context(|| format!("clear {}", dir.display()))?;
+        }
         std::fs::create_dir_all(dir.join(REFS_DIR))
             .with_context(|| format!("create {}", dir.display()))?;
         Ok(Staging {
@@ -101,6 +105,7 @@ impl AvatarStore {
             slug: slug.to_string(),
             dir,
             committed: false,
+            preserved: false,
         })
     }
 
@@ -205,13 +210,16 @@ impl AvatarStore {
     }
 }
 
-/// A staged avatar directory. Dropping it without `commit` removes it.
+/// A staged avatar directory. Dropping it without `commit` removes it, unless
+/// `preserve` was called: a protocol step (the agent round-trip) keeps the
+/// directory alive so the agent can read the representatives it was just given.
 #[derive(Debug)]
 pub struct Staging {
     root: PathBuf,
     slug: String,
     dir: PathBuf,
     committed: bool,
+    preserved: bool,
 }
 
 impl Staging {
@@ -221,6 +229,13 @@ impl Staging {
 
     pub fn refs_dir(&self) -> PathBuf {
         self.dir.join(REFS_DIR)
+    }
+
+    /// Keep the directory on drop. Called when the call ends in a round-trip
+    /// request or a refused verification: those hand out representative paths
+    /// that must still exist when the agent looks at them.
+    pub fn preserve(&mut self) {
+        self.preserved = true;
     }
 
     /// Validate and write the staged files, then swap the directory into place.
@@ -262,7 +277,7 @@ impl Staging {
 
 impl Drop for Staging {
     fn drop(&mut self) {
-        if !self.committed {
+        if !self.committed && !self.preserved {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
@@ -447,6 +462,27 @@ mod tests {
         let loaded = store.load("smoke").unwrap();
         assert_eq!(loaded.avatar.identity.eyes, "brown");
         assert_eq!(std::fs::read(store.refs_dir("smoke").join("01.jpg")).unwrap(), b"jpg");
+    }
+
+    #[test]
+    fn staging_survives_a_protocol_step() {
+        let (_dir, store) = store_with_refs();
+        let kept = {
+            let mut staging = store.begin_staging("smoke").unwrap();
+            std::fs::write(staging.refs_dir().join("01.jpg"), b"rep").unwrap();
+            let dir = staging.dir().to_path_buf();
+            staging.preserve();
+            dir
+        };
+        // The representatives handed to the agent still exist after the call.
+        assert!(kept.is_dir(), "preserved staging was removed");
+        assert_eq!(std::fs::read(kept.join("refs/01.jpg")).unwrap(), b"rep");
+        // The next call wipes the leftover instead of stacking a second one.
+        let next = store.begin_staging("smoke").unwrap();
+        assert_eq!(next.dir(), kept);
+        assert_eq!(std::fs::read_dir(next.refs_dir()).unwrap().count(), 0);
+        // Not a canon: the store never lists a staging directory.
+        assert!(store.list().unwrap().is_empty());
     }
 
     #[test]
