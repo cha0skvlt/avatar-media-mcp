@@ -71,8 +71,8 @@ avatar-media-mcp/                # the crate — 9092 lines of Rust
 │   ├── providers/               # 176  base 87, registry 40, fal/elevenlabs/fish/byteplus 37
 │   ├── pipeline/                # 1674 faceswap 1296, qc 160, avatar_build 134, assemble 24,
 │   │                            #      audio 19, keyframes 14, shots 14
-│   ├── infra/                   # 944  avatar_store 493, cache 106, ledger 96, store 50,
-│   │                            #      image_io 69, paths 62, ffmpeg 59
+│   ├── infra/                   # 1002  avatar_store 493, cache 106, ledger 96, store 50,
+│   │                            #      image_io 127, paths 62, ffmpeg 59
 │   ├── tools/                   # 487  avatar.rs 333 — `avatar_create`; health.rs 154 — preflight
 │   └── series.rs                #  16  M7 stubs
 └── tests/
@@ -82,7 +82,7 @@ avatar-media-mcp/                # the crate — 9092 lines of Rust
     └── e2e_models.rs            #  94  1 test — #[ignore], needs weights + photos
 ```
 
-Counters: `cargo test --features local-identity` → **107/107 green** (83 lib unit + 5 integration + 18 smoke + 1 db), plus **1 ignored** (`e2e_models`). `cargo check --features local-identity --all-targets` → **0 warnings**. `cargo clippy --all-targets` → **0 warnings**.
+Counters: `cargo test --features local-identity` → **108/108 green** (84 lib unit + 5 integration + 18 smoke + 1 db), plus **1 ignored** (`e2e_models`). `cargo check --features local-identity --all-targets` → **0 warnings**. `cargo clippy --all-targets` → **0 warnings**.
 
 Runtime path rule: the server resolves `models/insightface/buffalo_l`, `models/faceswap` and writes `avatars/<slug>/` **relative to the process cwd**. It must be launched with `cwd = avatar-media-mcp`.
 
@@ -226,7 +226,7 @@ The AOE agent reads these tables directly through `kb`/`database`; the `cost_led
 | File | Status | Contents |
 | --- | --- | --- |
 | `avatar_store.rs` | ✅ | the only avatar writer/reader: `save` refuses absolute or missing refs and a primary outside `refs.set`; `load` refuses a directory whose refs disappeared; `list`; atomic writes. Layout: `avatar.json`, `identity_model.json`, `refs/NN.jpg` |
-| `image_io.rs` | ✅ | `open_limited` / `open_rgb8`: every decode is bounded (≤12000 px side, ≤512 MB) — a decompression bomb is an error |
+| `image_io.rs` | ✅ | `open_limited` / `open_rgb8`: every decode is bounded (≤12000 px side, ≤512 MB) — a decompression bomb is an error — and the decoder's EXIF orientation is baked into the pixels before the image is returned: a missing or broken EXIF block reads as upright, never as an error |
 | `paths.rs` | ✅ | `confine_output`: tool writes must resolve inside the workspace; reads stay unrestricted |
 | `cache.rs` | ✅ | content-addressed cache: `key(provider, model, params, input_hashes)` = SHA-256 over length-prefixed fields (no boundary collisions); `put` writes a temp file and renames (a crash cannot leave a truncated hit); `get`, `file_hash()` |
 | `ffmpeg.rs` | ◐ | `check_available()` (async, ffmpeg+ffprobe in PATH) ✅; `probe()` bails at M2; `FfmpegOp` enum (Trim/Concat/CaptionsAss/Loudnorm/SidechainDuck/ColorGradeGrain/NormalizeFps) — `argv()` returns `Result` and bails until the M2 builders land |
@@ -285,9 +285,9 @@ Stubs answer with `invalid_params` and the milestone they belong to — the cont
 
 ---
 
-## 12. Tests — ✅ 107/107 (+1 ignored)
+## 12. Tests — ✅ 108/108 (+1 ignored)
 
-`cargo test --features local-identity` → 83 lib unit + 5 integration + 18 smoke + 1 db, all green; `e2e_models` is `#[ignore]`d. The default suite is hermetic: pure functions and temp directories. The `db` test skips itself when `DATABASE_URL` is unset.
+`cargo test --features local-identity` → 84 lib unit + 5 integration + 18 smoke + 1 db, all green; `e2e_models` is `#[ignore]`d. The default suite is hermetic: pure functions and temp directories. The `db` test skips itself when `DATABASE_URL` is unset.
 
 - **`pipeline/faceswap.rs`** (18): affine invert/scale, Umeyama (similarity, identity, isotropic covariance), Reinhard (noop, mean shift), hull/fill/masks, mouth MAR and keep hole, ellipse fallback, warp identity/translation, paste mask and forward-sampler round-trip, unusable-landmark contour returns an empty mask.
 - **`identity/scoring.rs`** (13): calibration (known separability, auto-pass refusal, disabled-fail flag consistency), drift (stable / linear decline / step / outlier, angle offsets), assignment (K≠M, twin canons, swap), clip aggregation, fusion (training, channel conflict, source mismatch), per-avatar pass threshold cannot invert the gate.
@@ -296,7 +296,7 @@ Stubs answer with `invalid_params` and the milestone they belong to — the cont
 - **`identity/clusters.rs`** (6): two appearance states, single state, empty input, closest-cluster assignment, invalid vectors rejected, order-independence (reversed input → same clusters).
 - **`tools/avatar.rs`** (3): slug traversal rejected, near-duplicate removal, photo count bounded.
 - **`infra/avatar_store.rs`** (11): save/load roundtrip, absolute refs refused, missing ref refused on save, primary must be in the set, a ref that disappeared is reported on load, missing model file is an error, slug traversal refused, staging commit replaces the live avatar, dropped staging leaves it untouched, schema_version mismatch refused, slug mismatch refused.
-- **`infra/image_io.rs`** (3): oversized image refused, normal photo accepted, missing file is an error.
+- **`infra/image_io.rs`** (4): oversized image refused, normal photo accepted, missing file is an error, EXIF orientation (6 and 1) baked into the pixels at decode.
 - **`infra/paths.rs`** (3): output inside the workspace allowed, outside refused, traversal refused.
 - **`config/settings.rs`** (4): defaults valid, file overrides defaults, missing file falls back, zero/NaN budget and zero concurrency refused.
 - **`infra/cache.rs`** (2): field boundaries do not collide, atomic put leaves no temp file.
