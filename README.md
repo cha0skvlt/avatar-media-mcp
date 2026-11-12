@@ -1,31 +1,50 @@
 # avatar-media-mcp
 
-Rust MCP server for generative media with avatars. The agent is the brain
-(script, dialogue, approvals); this server executes everything that costs money
-or touches files.
+**A Rust MCP server that gives [CHA0S AOE](https://github.com/cha0skvlt/CHA0S_AOE) hands for generative media with avatars** — identity, face swap, voice, frames, clips, the final cut, and a budget it refuses to exceed.
 
-> **Status: active build (work in progress).** The identity core, the face-swap
-> pipeline and `avatar_create` are implemented and tested; the generation
-> pipeline (TTS, keyframes, shots, assembly) is stubbed at M2–M6. See
-> `ARCHITECTURE.md` for the per-module status map.
+![Rust](https://img.shields.io/badge/rust-edition_2024-000000?logo=rust&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-rmcp_0.3-6E4AFF)
+![ONNX](https://img.shields.io/badge/ONNX_Runtime-ort_2.0--rc.15-005CED?logo=onnx&logoColor=white)
+![Postgres](https://img.shields.io/badge/Postgres-pgvector-4169E1?logo=postgresql&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-107_passing-2ea043)
+![License](https://img.shields.io/badge/license-PolyForm_Shield_1.0.0-blue)
+![Status](https://img.shields.io/badge/status-under_construction-orange)
 
-**Live today:** `faceswap` (FS1) and `avatar_create` (M1), plus `providers_check`
-(preflight). The remaining 14 tools answer with an explicit "planned for M<n>"
-error.
+---
 
-## Build
+> # 🚧 UNDER CONSTRUCTION 🚧
+>
+> **This is an active build, not a release.** The identity core, the face-swap
+> pipeline and `avatar_create` work and are tested. The generation pipeline —
+> TTS, keyframes, shots, assembly — is stubbed at M2–M6, and 14 of the 17
+> registered MCP tools answer with an explicit `planned for M<n>` error.
+>
+> The contour is real and the stubs are honest: every unimplemented path returns
+> the milestone it belongs to instead of pretending. `ARCHITECTURE.md` carries
+> the per-module status map (✅ / ◐ / ⬜).
+
+---
+
+## What works today
+
+| Piece | State |
+| --- | --- |
+| InsightFace pipeline in pure Rust — SCRFD detect, 112×112 alignment (`solve6`), ArcFace 512-d | ✅ |
+| Identity decisions — Bayesian threshold calibration, Theil–Sen drift, Hungarian multi-character assignment | ✅ |
+| `faceswap` — InSwapper + Reinhard color transfer + landmark paste mask, `ort` on CPU | ✅ |
+| `avatar_create` — photos → clusters → identity model → `avatar.json`, agent round-trip | ✅ |
+| `providers_check` — preflight over config, keys, ORT dylib, models, ffmpeg, Postgres | ✅ |
+| TTS, keyframes, TALK/BROLL shots, assembly, export | ⬜ M2–M6 |
+
+## Quick start
 
 ```bash
 cargo build --release --features local-identity
 ```
 
-`local-identity` enables the ONNX path (`ort`, load-dynamic) that `faceswap`
-and `avatar_create` load their models through.
-
-## Run
-
-The server resolves `models/`, `avatars/` and `config/` **relative to the
-process cwd**: launch it from this directory.
+`local-identity` enables the ONNX path (`ort`, load-dynamic). The server resolves
+`models/`, `avatars/` and `config/` **relative to the process cwd** — launch it
+from this directory:
 
 ```bash
 ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
@@ -34,9 +53,9 @@ ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
 
 Logs go to stderr; `RUST_LOG=debug` raises the level.
 
-## Wiring into CHA0S AOE
+### Wire it into CHA0S AOE
 
-`~/.config/cha0s/settings.json`:
+`~/.config/cha0s/settings.json` — zero changes to the IDE itself:
 
 ```jsonc
 "context_servers": {
@@ -52,71 +71,36 @@ Logs go to stderr; `RUST_LOG=debug` raises the level.
 }
 ```
 
-Keys are read from the **process env** (`context_servers.env`); `.env.example`
-lists the names.
+Keys travel through the process env (`context_servers.env`); `.env.example`
+lists the names. They are never logged and never written to the database.
 
-## Layout
+## Design in three lines
 
-```
-config/            models.yaml (registry), platforms.yaml (export rules), settings.yaml (runtime knobs)
-migrations/        0001_init.sql (schema), 0002_integrity.sql (unique request_id, FKs, cascade)
-models/            insightface/buffalo_l, faceswap, ort/lib
-avatars/           <slug>/{avatar.json, identity_model.json, refs/NN.jpg}
-src/config/        models, platforms, settings (figment loader)
-src/domain/        avatar, project, script, job, cost, series — types only
-src/identity/      scoring (decisions), arcface (SCRFD + ArcFace), clusters, textpass, embeddings, threed
-src/providers/     base traits; fal/elevenlabs/fish/byteplus structs (M1/M2)
-src/pipeline/      faceswap, avatar_build (normalize + quality), qc (pure gates); audio/keyframes/shots/assemble at M2–M6
-src/infra/         avatar_store, image_io (bounded decode), paths (write confinement), cache, ffmpeg, ledger, store
-src/tools/         avatar_create, health (preflight)
-src/bin/           avatar_build, faceswap, faceswap_diag, identity_test
-tests/             integration, smoke, db (needs DATABASE_URL), e2e_models (ignored, needs weights)
-```
+- **Provider-neutral.** Models are data in `config/models.yaml` (role → tier → provider/price); every call goes through the traits in `src/providers/base.rs`. A vendor name lives only in an adapter file.
+- **Typed where it matters.** `CosineScore`, `EmbeddingSource`, `GeometryDistance` — mixing incompatible vector spaces is a compile error, not a silent 0.9.
+- **Money is transactional.** `ledger.rs` locks the project row and enforces the cap inside one transaction; `confine_output` keeps tool writes inside the workspace; every image decode is bounded.
 
-## CLI entry points
+## Requirements
 
-```bash
-# Avatar from a folder of photos (writes through the same AvatarStore as the tool)
-ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
-  cargo run --features local-identity --bin avatar_build -- \
-  --name <slug> --photos <dir>
-
-# Face swap
-ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
-  cargo run --features local-identity --bin faceswap -- <face> <target> <out.png>
-
-# Embedding sanity check
-ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
-  cargo run --features local-identity --bin identity_test -- <img1> [<img2>]
-```
+- `ffmpeg` + `ffprobe` in PATH (assembly, M2).
+- `ORT_DYLIB_PATH` — required by `faceswap`, `avatar_create` and the CLIs.
+- `models/` (~370 MB) — buffalo_l from HuggingFace `ApacheOne/insightface` plus the faceswap weights. Not in the repo.
+- Postgres with pgvector — only for stateful tools (M2).
 
 ## Tests
 
 ```bash
-cargo test --features local-identity            # 107 tests, hermetic (+1 ignored)
-DATABASE_URL=postgres://localhost/avatar_media_qa \
-  cargo test --features local-identity --test db
-AVATAR_E2E_PHOTOS=/path/to/photos ORT_DYLIB_PATH=models/ort/lib/libonnxruntime.1.31.0.dylib \
-  cargo test --features local-identity --test e2e_models -- --ignored --nocapture
+cargo test --features local-identity    # 107 passing, hermetic (+1 ignored)
 ```
 
-The `db` test skips itself when `DATABASE_URL` is unset. The `e2e_models` test is
-`#[ignore]`d: it runs the full three-call `avatar_create` flow on real photos.
+## Docs
 
-## Requirements
-
-- `ffmpeg` + `ffprobe` in PATH — used by assembly (M2).
-- `ORT_DYLIB_PATH` — required by `faceswap`, `avatar_create` and the CLIs.
-- `models/` (~370 MB) — download from HuggingFace `ApacheOne/insightface`
-  (buffalo_l) plus the faceswap weights.
-- Postgres with pgvector — only for stateful tools (M2). `CREATE EXTENSION vector`
-  in `0001_init.sql` needs a superuser; on a managed instance create the
-  extension first.
+`ARCHITECTURE.md` — the code map: modules, status per file, accepted decisions.
 
 ## License
 
-PolyForm Shield License 1.0.0 — see `LICENSE`. Source-available: you may read,
-run, modify and redistribute the code, but not use it to provide a product that
-competes with this software or with a product the licensor provides using it.
+[PolyForm Shield 1.0.0](LICENSE) — source-available. Read it, run it, modify it,
+redistribute it; do not use it to ship a product that competes with this software
+or with a product the licensor provides using it.
 
 Required Notice: Copyright 2026 cha0skvlt (https://github.com/cha0skvlt)
