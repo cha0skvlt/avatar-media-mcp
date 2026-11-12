@@ -55,24 +55,32 @@ Logs go to stderr; `RUST_LOG=debug` raises the level.
 
 ### Wire it into CHA0S AOE
 
-`~/.config/cha0s/settings.json` — zero changes to the IDE itself:
+`~/.config/cha0s/settings.json`, root-level key — zero changes to the IDE itself.
+The AOE server shape has no `cwd`, and the server reads `models/`, `avatars/`
+and `config/` from the process cwd, so the command enters the crate first:
 
 ```jsonc
 "context_servers": {
   "avatar-media": {
-    "command": "/abs/path/to/avatar-media-mcp",
-    "args": [],
-    "env": {
-      "FAL_KEY": "...",
-      "ELEVENLABS_API_KEY": "...",
-      "DATABASE_URL": "postgres://..."
-    }
+    "enabled": true,
+    "command": "/bin/sh",
+    "args": ["-c", "cd /abs/path/to/avatar-media-mcp && exec ./target/debug/avatar-media-mcp"],
+    "env": { "ORT_DYLIB_PATH": "/abs/path/to/avatar-media-mcp/models/ort/lib/libonnxruntime.1.31.0.dylib" },
+    "timeout": 900
   }
 }
 ```
 
+`agent.profiles.<id>.context_servers` is a tool preset, not a server definition —
+the profile needs `enable_all_context_servers: true` (or the tool named in its
+preset) before it sees these tools.
+
 Keys travel through the process env (`context_servers.env`); `.env.example`
 lists the names. They are never logged and never written to the database.
+
+Connected and running: CHA0S AOE spawns the server as its child, `initialize`
+answers `rmcp` 0.3.2, `tools/list` returns 17 names, `providers_check` reports
+the real environment.
 
 ## Design in three lines
 

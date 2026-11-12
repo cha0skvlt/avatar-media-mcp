@@ -90,19 +90,27 @@ Runtime path rule: the server resolves `models/insightface/buffalo_l`, `models/f
 
 ## 3. Wiring into CHA0S AOE
 
-The MCP stdio server is registered as a `context_servers` entry in `~/.config/cha0s/settings.json`:
+The MCP stdio server is registered as a **root-level** `context_servers` entry in `~/.config/cha0s/settings.json`. The per-profile map `agent.profiles.<id>.context_servers` is a **tool preset** (`{ tools: { <tool>: bool } }`), not a server definition — a definition written there is rejected: `missing field name`.
+
+The AOE context-server shape has no working-directory field (`command`, `args`, `env`, `timeout`), and the server resolves `models/`, `avatars/` and `config/` against the process cwd (§2). The entry therefore launches through a shell that enters the crate directory first:
 
 ```jsonc
 "context_servers": {
   "avatar-media": {
-    "command": "/abs/path/to/avatar-media-mcp",
-    "args": [],
-    "env": { "FAL_KEY": "...", "ELEVENLABS_API_KEY": "...", "DATABASE_URL": "..." }
+    "enabled": true,
+    "command": "/bin/sh",
+    "args": ["-c", "cd /abs/path/to/avatar-media-mcp && exec ./target/debug/avatar-media-mcp"],
+    "env": { "ORT_DYLIB_PATH": "/abs/path/to/avatar-media-mcp/models/ort/lib/libonnxruntime.1.31.0.dylib" },
+    "timeout": 900
   }
 }
 ```
 
-Zero changes to AOE code. Provider keys travel through the **process env**: `ProviderKeys::from_env()` reads seven keys from the `context_servers.env` block, empty strings treated as absent. Keys are never logged and never written to the database.
+A profile sees the server's tools only when its `enable_all_context_servers` is true or the tool is named in that profile's preset; the built-in `write` profile (screen name **Agent**) carries `enable_all_context_servers: true`. When the flag had to be set for a builtin profile, the whole profile object is written — a nested path write fails on the missing `name` field.
+
+Zero changes to AOE code. Provider keys travel through the **process env**: `ProviderKeys::from_env()` reads the keys from the `context_servers.env` block, empty strings treated as absent. Keys are never logged and never written to the database. A missing key is reported by `providers_check`, not by a startup failure — engines load lazily, so an unwired install still answers `initialize`.
+
+Connected and exercised: AOE spawns the server as its child (one process per session, ~12 MB idle before the first engine load), `initialize` answers `rmcp` 0.3.2, `tools/list` returns the 17 names in §11, and `providers_check` answers with the real environment. The `avatar-media-mcp` entry is the only registered MCP server in that settings file.
 
 `main.rs` opens Postgres lazily: `Store::connect` (§7) is called by the stateful tools (M2).
 
