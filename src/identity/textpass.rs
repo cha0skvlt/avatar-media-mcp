@@ -85,7 +85,7 @@ pub fn channel_order(configured: &str) -> &'static [&'static str] {
     }
 }
 
-/// Agent channel: the multimodal IDE agent fills the profile (verified
+/// Agent channel: the multimodal AOE agent fills the profile (verified
 /// working in this environment). The server cannot block on the operator —
 /// `describe` fails with the exact prompt + numeric summary, the agent fills
 /// `identity_json` on the follow-up `avatar_create` call, and `verify` is the

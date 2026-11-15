@@ -21,7 +21,7 @@ Markers:
 
 ## 1. What this is
 
-`avatar-media-mcp` is a Rust MCP server (cargo crate, edition 2024) — the hands of the CHA0S AOE IDE agent for generative media with avatars. The agent is the brain (script, dialogue, approvals); the server executes everything that costs money or touches files: stores avatars, generates voiceover/frames/clips through external models, assembles the final cut through ffmpeg, tracks spend, and refuses to exceed the budget.
+`avatar-media-mcp` is a Rust MCP server (cargo crate, edition 2024) — the hands of the CHA0S AOE agent for generative media with avatars. The agent is the brain (script, dialogue, approvals); the server executes everything that costs money or touches files: stores avatars, generates voiceover/frames/clips through external models, assembles the final cut through ffmpeg, tracks spend, and refuses to exceed the budget.
 
 **The server is provider-neutral.** Models are data in `config/models.yaml` (role → tier → provider/model/price), and every provider call goes through the traits in `src/providers/base.rs`. Pipeline stages that call a provider take a `Tier`; the adapter is chosen from the registry, so no stage names a vendor. The same holds for the other axes: language, platform profile and output format are data, not code.
 

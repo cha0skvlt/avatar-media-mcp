@@ -55,7 +55,7 @@ Logs go to stderr; `RUST_LOG=debug` raises the level.
 
 ### Wire it into CHA0S AOE
 
-`~/.config/cha0s/settings.json`, root-level key — zero changes to the IDE itself.
+`~/.config/cha0s/settings.json`, root-level key — zero changes to the AOE itself.
 The AOE server shape has no `cwd`, and the server reads `models/`, `avatars/`
 and `config/` from the process cwd, so the command enters the crate first:
 
